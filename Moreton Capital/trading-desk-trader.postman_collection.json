@@ -1,0 +1,1230 @@
+{
+  "info": {
+    "name": "trading-desk-trader",
+    "description": "# Trading Desk — Trader Guide\n\nHow to use the Trading Desk API as a trader: onboarding, market data, orders,\ntrades and balance. The `trading-desk-trader` Postman collection is a runnable\nversion of this guide — every step below exists as a numbered request in it.\n\n## Setup\n\n1. Import `trading-desk-trader.postman_collection.json` into Postman.\n2. Under the collection's **Variables** tab, set `baseUrl` (the API URL you were\n   given), `userEmail` and `userPassword`.\n3. Before the market/order requests, also set `tokenId` (an outcome token) and\n   `conditionId` (its market) — copy them from a **List markets** response.\n4. Run the requests top to bottom — test scripts auto-capture tokens and ids\n   into collection variables. Polling requests say so in their name: re-send\n   until they pass.\n\n## How authentication works\n\n- `register`, `login` and `/health` are public (login/register rate-limited\n  5/min per IP). Everything else needs `Authorization: Bearer <JWT>` from login.\n- Trading endpoints additionally require you to be **onboarded** — credentials\n  provisioned and a deposit wallet deployed by an admin. If anything is missing\n  you get a single `403` naming what's absent.\n- Your credentials are cached server-side for the token's lifetime (24 h) and\n  re-warmed on every login — if trading calls return `403` for unavailable\n  credentials, just log in again.\n- `POST /v1/auth/logout` invalidates the current token.\n\n## Getting started (first time)\n\n| Step | Do | Expect |\n|---|---|---|\n| 1 | `POST /v1/auth/register` with `email` + `password` (skip if an admin registered you) | `201`, `credential_status: pending` |\n| 2 | Wait for an admin to onboard you — poll `GET /v1/users/me` | `credential_status: ready` |\n| 3 | `POST /v1/auth/login` | `200` + JWT (`409` = not provisioned yet) |\n| 4 | `GET /v1/balance` | your funded pUSD balance |\n\n## Everyday tasks\n\n- **Check balance** → `GET /v1/balance`. After an external deposit, force a\n  refresh first: `POST /v1/balance/sync`.\n- **Find a market** → `GET /v1/markets?keyword=...`, then\n  `GET /v1/markets/clob-info/{conditionId}` for tick size, fees, neg-risk flag\n  and outcome tokens in one call.\n- **Place a limit order** → check `GET /v1/markets/orderbook/{tokenId}`, then\n  `POST /v1/orders`.\n- **Place a market order** → `GET /v1/markets/price-estimate/{tokenId}` FIRST,\n  then `POST /v1/orders/market` — it fills immediately.\n- **Cancel** → one order `DELETE /v1/orders/{id}` · a list `POST\n  /v1/orders/cancel-batch` · one market `POST /v1/orders/cancel-market` ·\n  everything (kill-switch) `POST /v1/orders/cancel-all`.\n- **See your fills** → `GET /v1/trades`.\n\n## ⚠ Real money\n\n- Orders trade real pUSD on Polymarket. The CLOB enforces ~$1 minimum notional\n  (`price × size ≥ 1`).\n- Market orders (FOK) take liquidity and fill the moment they match — always\n  price-estimate first.\n- **On a BUY, `size` is a floor — not a target.** You commit at most\n  `price × size` pUSD and receive at least `size` shares, so the spend is the\n  hard cap and the share count can come out higher. Measured: `size: 3` at\n  `price: 0.90` into a ~0.57 book filled 4.74 shares for $2.70. For an exact\n  share count, price at the best ask from `GET /v1/markets/orderbook/{tokenId}`\n  rather than above it. A SELL is exact — `size` shares leave, and the proceeds\n  are at least `price × size`.\n- **Fees are charged on top.** `amount` on a market order is the notional, not\n  the debit — a $1.00 BUY of a longshot was debited $1.0595. You pay\n  `fee_rate × (1 − price)` of what you spend; get `fee_rate` from\n  `GET /v1/markets/fee-rate/{tokenId}`. Only takers pay, so a limit order that\n  rests on the book costs nothing.\n- Network retries are safe when you send a `client_order_id`: repeating it\n  replays the stored result instead of placing a second order.\n\n<!-- generated:begin — do not edit below; edit the Postman collection, then run: python3 scripts/generate_api_guides.py -->\n\n## Endpoint reference\n\n### Onboarding & session\n\n#### Register\n`POST /v1/auth/register` · auth: **public**\n**Inputs:** body `email`, `password`\n\n**Auth: none** (public, rate-limited 5/min per IP shared with login).\n\nCreates the user **identity only** — no wallet, no Polymarket credentials. Returns `201` with a JWT and `credential_status: pending`; an admin must then provision credentials before login works. Skip this request if an admin registered you.\n\n**Password rules:** 8–72 chars, ASCII letters, digits and special characters only (no accents, emoji or spaces); at least one uppercase, one lowercase, one digit and one special character.\n\n**Errors:** `409` email already registered · `422` email malformed / password rules not met · `429` rate-limited.\n\n#### Get me\n`GET /v1/users/me` · auth: **bearer**\n\nYour own profile — the PII-free public shape: `id`, `email`, `created_at`, `role`, `credential_status`, `account_status`. While waiting for an admin to provision you, re-send this request until `credential_status` reads `ready`, then log in.\n\n**Errors:** `401` missing/expired/blacklisted token.\n\n#### Login\n`POST /v1/auth/login` · auth: **public**\n**Inputs:** body `email`, `password`\n\n**Auth: none** (public, rate-limited).\n\nReturns `200` with a fresh JWT once credentials are `ready`, and re-warms the server-side credential cache that the trading endpoints need (cached for the token's 24 h lifetime — if trading calls ever return 403 for unavailable credentials, log in again). The server records your IP: `last_login_ip` on every login, `registration_ip` once at first login.\n\n**Errors:** `401` bad credentials · `403` account disabled · `409` credentials not ready · `429` rate-limited.\n\n#### Health check\n`GET /health` · auth: **public**\n\n**Auth: none** — the only unauthenticated path.\n\nAggregated db / redis / Polymarket checks: `{status: ok|degraded, service, version, checks: {...}}`. Always returns `200` — a failing dependency shows up as `status: degraded` in the body, never as a 5xx.\n\n### Markets — read-only (no funds)\n\n#### List markets\n`GET /v1/markets` · auth: **onboarded**\n**Inputs:** query `limit`, `active`, `closed`, `keyword`\n\nActive markets from the Polymarket Gamma API.\n\n**Query:** `limit`, `active`, `closed`, `keyword` (all optional).\n\n#### Order book\n`GET /v1/markets/orderbook/{tokenId}` · auth: **onboarded**\n\nThe CLOB order book (bids/asks) for one outcome token.\n\n#### Price estimate\n`GET /v1/markets/price-estimate/{tokenId}` · auth: **onboarded**\n**Inputs:** query `side`, `amount`, `order_type`\n\nEstimated execution price for a market order, computed from the live book — check this before any FOK order.\n\n**Query:** `side` (buy|sell), `amount` (pUSD to spend on buy / shares on sell), `order_type` (FOK|FAK).\n\n**Execution price only — fees excluded.** The taker fee is charged on top of the fill; combine this with \"Fee rate\" for the total debit.\n\n**Errors:** `422` no matchable liquidity for that size.\n\n#### Tick size\n`GET /v1/markets/tick-size/{tokenId}` · auth: **onboarded**\n\nMinimum price increment for the token — order prices must be a multiple of this.\n\n#### Fee rate\n`GET /v1/markets/fee-rate/{tokenId}` · auth: **onboarded**\n\nThe taker-fee parameters for the token's market: `fee_rate`, `fee_exponent`, `taker_only` and the resolved `condition_id`. `fee_rate: 0` means the market is free — Polymarket omits the fee block entirely on those.\n\n**What you pay.** Takers are charged `shares × fee_rate × price × (1 − price)` in pUSD, **on top of** the trade. As a share of what you spend that reduces to `fee_rate × (1 − price)`: at `fee_rate` 0.07, price 0.15 costs ~6%, price 0.60 costs ~2.8%. Dearest on longshots, near zero on heavy favourites. Makers pay nothing, so a limit order that rests on the book is free.\n\nRates observed: 0.07 crypto, 0.05 sports and most others, no fee on geopolitical. Ignore the `base_fee` on Polymarket's own `/fee-rate` — it is a flat 1000 on every market and prices nothing.\n\n**Errors:** `404` unknown token id.\n\n#### Last trade price\n`GET /v1/markets/last-trade-price/{tokenId}` · auth: **onboarded**\n\nMost recent trade price for the token.\n\n#### CLOB market info\n`GET /v1/markets/clob-info/{conditionId}` · auth: **onboarded**\n\nBundled CLOB market params by condition id: tick size, neg-risk flag, fees, outcome tokens, rewards — one call instead of four.\n\n**Errors:** `404` unknown condition id.\n\n#### Market detail\n`GET /v1/markets/detail/{conditionId}` · auth: **onboarded**\n\nSingle market detail by condition id (`get_market`).\n\n**Errors:** `404` unknown condition id.\n\n### Orders — limit (⚠ real funds)\n\n#### Place limit order\n`POST /v1/orders` · auth: **onboarded**\n**Inputs:** body `token_id`, `side`, `price`, `size`, `order_type`, `client_order_id`\n\nPlaces a GTC limit order via a POLY_1271 client (your EOA signs, your deposit wallet funds).\n\n**Body:** `token_id`, `side` (buy|sell), `price` (0<p<1, ≤4 decimals, multiple of tick size), `size` (≤6 dp), `order_type` (GTC|GTD — GTD also needs `expiration` > now+60 s), optional `client_order_id` (8–128 chars): retries with the same value replay the stored result instead of re-placing.\n\n**What `size` commits you to.** The order is signed as a ratio, not a share count. On a **BUY** you put up at most `size × price` pUSD and must get back at least `size` shares — the spend is the hard cap, `size` is only a floor. A **SELL** mirrors it: exactly `size` shares leave and you receive at least `size × price`. Measured against Polymarket (they document this nowhere): a BUY priced above the best ask spends the whole `size × price` and returns more than `size` shares — `size: 3` at `price: 0.90` into a ~0.57 book filled **4.74 shares for $2.70**. For an exact share count, price at the best ask from `GET /v1/markets/orderbook/{tokenId}`, never above it.\n\n**Fees.** Takers only. A limit order that rests on the book is charged nothing; one that crosses and fills immediately pays the taker fee on top of the trade — see \"Fee rate\".\n\n**Errors:** `422` local validation or CLOB rejection (Polymarket's message forwarded) · `409` same client_order_id in flight · `502` CLOB unreachable.\n\n#### List open orders\n`GET /v1/orders` · auth: **onboarded**\n**Inputs:** query `market`, `asset_id`\n\nYour open orders, live from the CLOB (never the local DB — the CLOB is the source of truth). Scoped to your own API credentials.\n\n**Query:** optional `market`, `asset_id` filters.\n\n#### Get the order\n`GET /v1/orders/{clobOrderId}` · auth: **onboarded**\n\nOne order by CLOB id, live passthrough.\n\n**Errors:** `404` unknown id.\n\n#### Cancel the order\n`DELETE /v1/orders/{clobOrderId}` · auth: **onboarded**\n\nCancels the order. Idempotent-safe by design: an already-gone order is `200 {canceled: false, reason}` — never an error, so retry loops are harmless.\n\n**Errors:** `502` only when the CLOB itself is unreachable.\n\n### Market order (⚠ real funds — fills immediately)\n\n#### Place FOK market order\n`POST /v1/orders/market` · auth: **onboarded**\n**Inputs:** body `token_id`, `side`, `amount`, `order_type`\n\nPlaces a fill-or-kill market order.\n\n**Body:** `token_id`, `side`, `amount` — pUSD to spend on BUY, shares to sell on SELL — `order_type` (FOK|FAK), optional `client_order_id` (same replay semantics as limit orders). The audit row stores `price: null` (the book prices it).\n\n**`amount` is the notional, not the debit.** The taker fee is charged on top of `amount`, so more leaves your wallet than you asked to spend — a `$1.00` BUY was debited **$1.0595** in testing. Budget roughly `amount × (1 + fee_rate × (1 − price))` and leave headroom: a BUY for your entire balance is rejected because the fee cannot be covered. See \"Fee rate\".\n\n**Errors:** `422` validation / CLOB rejection (e.g. not enough balance or liquidity) · `502` CLOB unreachable.\n\n### Bulk cancels\n\n#### Cancel a batch\n`POST /v1/orders/cancel-batch` · auth: **onboarded**\n**Inputs:** body `order_ids`\n\nCancels a list of orders by CLOB id (min 1). Unknown/already-gone ids come back under `not_canceled` with reasons — not an error.\n\n#### Cancel all (kill-switch)\n`POST /v1/orders/cancel-all` · auth: **onboarded**\n\nCancels ALL of your open orders across every market. The kill-switch.\n\n#### Cancel one market\n`POST /v1/orders/cancel-market` · auth: **onboarded**\n**Inputs:** body `market`\n\nCancels all of your orders in one market.\n\n**Body:** `market` (condition id, required), optional `asset_id` to narrow to one token.\n\n### Trades & balance (read-only)\n\n#### Trade history (one page per call)\n`GET /v1/trades` · auth: **onboarded**\n**Inputs:** query `market`, `asset_id`, `before`, `after`, `next_cursor`\n\nYour fills, paginated explicitly — one page per call, pass back `next_cursor` from the previous response for the next page.\n\n**Query:** optional `market` (condition id), `asset_id` (token id), `before`/`after` (unix seconds), `next_cursor`.\n\n#### Balance & allowance (pUSD)\n`GET /v1/balance` · auth: **onboarded**\n**Inputs:** query `asset_type`, `token_id`\n\nYour deposit wallet's balance and allowance as the order book sees it.\n\n**Query:** `asset_type` = `collateral` (default, pUSD) or `conditional` — conditional also requires `token_id`, else `422`.\n\n#### Sync balance from on-chain\n`POST /v1/balance/sync` · auth: **onboarded**\n**Inputs:** query `asset_type`, `token_id`\n\nForces the CLOB to refresh its cached view of your balance from the chain — run after external transfers into the deposit wallet.\n\n**Query:** same `asset_type` / `token_id` semantics as the balance request.\n\n### Session end\n\n#### Logout\n`POST /v1/auth/logout` · auth: **bearer**\n\nBlacklists this token's `jti` for its remaining lifetime — the single-session logout.\n<!-- generated:end -->\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Register → JWT with credential_status=pending",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/auth/register",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "auth",
+            "register"
+          ]
+        },
+        "description": "**Auth: none** (public, rate-limited 5/min per IP shared with login).\n\nCreates the user **identity only** — no wallet, no Polymarket credentials. Returns `201` with a JWT and `credential_status: pending`; an admin must then provision credentials before login works. Skip this request if an admin registered you.\n\n**Password rules:** 8–72 chars, ASCII letters, digits and special characters only (no accents, emoji or spaces); at least one uppercase, one lowercase, one digit and one special character.\n\n**Errors:** `409` email already registered · `422` email malformed / password rules not met · `429` rate-limited.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('201', () => pm.response.code === 201);",
+              "const j = pm.response.json();",
+              "if (j.access_token) pm.collectionVariables.set('userToken', j.access_token);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Get me → capture userId (re-send until ready)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/users/me",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "users",
+            "me"
+          ]
+        },
+        "description": "**Auth: Bearer** (any authenticated user).\n\nYour own profile — the PII-free public shape: `id`, `email`, `created_at`, `role`, `credential_status`, `account_status`. While waiting for an admin to provision you, re-send this request until `credential_status` reads `ready`, then log in.\n\n**Errors:** `401` missing/expired/blacklisted token.",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{userToken}}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200', () => pm.response.code === 200);",
+              "const j = pm.response.json();",
+              "pm.collectionVariables.set('userId', j.id);",
+              "pm.test('credentials ready — re-send this request until it passes', () => j.credential_status === 'ready');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Login → capture userToken",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "v1",
+            "auth",
+            "login"
+          ]
+        },
+        "description": "**Auth: none** (public, rate-limited).\n\nReturns `200` with a fresh JWT once credentials are `ready`, and re-warms the server-side credential cache that the trading endpoints need (cached for the token's 24 h lifetime — if trading calls ever return 403 for unavailable credentials, log in again). The server records your IP: `last_login_ip` on every login, `registration_ip` once at first login.\n\n**Errors:** `401` bad credentials · `403` account disabled · `409` credentials not ready · `429` rate-limited.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200', () => pm.response.code === 200);",
+              "pm.collectionVariables.set('userToken', pm.response.json().access_token);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Health check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": "**Auth: none** — the only unauthenticated path.\n\nAggregated db / redis / Polymarket checks: `{status: ok|degraded, service, version, checks: {...}}`. Always returns `200` — a failing dependency shows up as `status: degraded` in the body, never as a 5xx."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200', () => pm.response.code === 200);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Markets — read-only (no funds)",
+      "description": "Market data via the auth proxy. **Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.\n\nSet `tokenId` and `conditionId` under Variables first. All reads use your own CLOB credentials.",
+      "item": [
+        {
+          "name": "5. List markets",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/markets?limit=5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "markets"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "5",
+                  "description": "max results"
+                },
+                {
+                  "key": "active",
+                  "value": "true",
+                  "description": "default true",
+                  "disabled": true
+                },
+                {
+                  "key": "closed",
+                  "value": "false",
+                  "description": "default false",
+                  "disabled": true
+                },
+                {
+                  "key": "keyword",
+                  "value": "",
+                  "description": "substring filter",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Active markets from the Polymarket Gamma API.\n\n**Query:** `limit`, `active`, `closed`, `keyword` (all optional).\n\n**Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "6. Order book",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/markets/orderbook/{{tokenId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "markets",
+                "orderbook",
+                "{{tokenId}}"
+              ]
+            },
+            "description": "The CLOB order book (bids/asks) for one outcome token.\n\n**Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "7. Price estimate",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/markets/price-estimate/{{tokenId}}?side=buy&amount={{marketAmount}}&order_type=FOK",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "markets",
+                "price-estimate",
+                "{{tokenId}}"
+              ],
+              "query": [
+                {
+                  "key": "side",
+                  "value": "buy",
+                  "description": "buy | sell"
+                },
+                {
+                  "key": "amount",
+                  "value": "{{marketAmount}}",
+                  "description": "pUSD (buy) / shares (sell)"
+                },
+                {
+                  "key": "order_type",
+                  "value": "FOK",
+                  "description": "FOK | FAK"
+                }
+              ]
+            },
+            "description": "Estimated execution price for a market order, computed from the live book — check this before any FOK order.\n\n**Query:** `side` (buy|sell), `amount` (pUSD to spend on buy / shares on sell), `order_type` (FOK|FAK).\n\n**Execution price only — fees excluded.** The taker fee is charged on top of the fill; combine this with \"Fee rate\" for the total debit.\n\n**Errors:** `422` no matchable liquidity for that size.\n\n**Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "8. Tick size",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/markets/tick-size/{{tokenId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "markets",
+                "tick-size",
+                "{{tokenId}}"
+              ]
+            },
+            "description": "Minimum price increment for the token — order prices must be a multiple of this.\n\n**Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "9. Fee rate",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/markets/fee-rate/{{tokenId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "markets",
+                "fee-rate",
+                "{{tokenId}}"
+              ]
+            },
+            "description": "The taker-fee parameters for the token's market: `fee_rate`, `fee_exponent`, `taker_only` and the resolved `condition_id`. `fee_rate: 0` means the market is free — Polymarket omits the fee block entirely on those.\n\n**What you pay.** Takers are charged `shares × fee_rate × price × (1 − price)` in pUSD, **on top of** the trade. As a share of what you spend that reduces to `fee_rate × (1 − price)`: at `fee_rate` 0.07, price 0.15 costs ~6%, price 0.60 costs ~2.8%. Dearest on longshots, near zero on heavy favourites. Makers pay nothing, so a limit order that rests on the book is free.\n\nRates observed: 0.07 crypto, 0.05 sports and most others, no fee on geopolitical. Ignore the `base_fee` on Polymarket's own `/fee-rate` — it is a flat 1000 on every market and prices nothing.\n\n**Errors:** `404` unknown token id.\n\n**Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "10. Last trade price",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/markets/last-trade-price/{{tokenId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "markets",
+                "last-trade-price",
+                "{{tokenId}}"
+              ]
+            },
+            "description": "Most recent trade price for the token.\n\n**Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "11. CLOB market info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/markets/clob-info/{{conditionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "markets",
+                "clob-info",
+                "{{conditionId}}"
+              ]
+            },
+            "description": "Bundled CLOB market params by condition id: tick size, neg-risk flag, fees, outcome tokens, rewards — one call instead of four.\n\n**Errors:** `404` unknown condition id.\n\n**Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "12. Market detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/markets/detail/{{conditionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "markets",
+                "detail",
+                "{{conditionId}}"
+              ]
+            },
+            "description": "Single market detail by condition id (`get_market`).\n\n**Errors:** `404` unknown condition id.\n\n**Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Orders — limit (⚠ real funds)",
+      "description": "Places a REAL limit order. Keep `orderPrice` deep out of the money (default 0.03) so nothing fills; the CLOB requires `orderPrice × orderSize ≥ ~$1` notional. **Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.",
+      "item": [
+        {
+          "name": "13. Place limit order → capture clobOrderId",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders"
+              ]
+            },
+            "description": "Places a GTC limit order via a POLY_1271 client (your EOA signs, your deposit wallet funds).\n\n**Body:** `token_id`, `side` (buy|sell), `price` (0<p<1, ≤4 decimals, multiple of tick size), `size` (≤6 dp), `order_type` (GTC|GTD — GTD also needs `expiration` > now+60 s), optional `client_order_id` (8–128 chars): retries with the same value replay the stored result instead of re-placing.\n\n**What `size` commits you to.** The order is signed as a ratio, not a share count. On a **BUY** you put up at most `size × price` pUSD and must get back at least `size` shares — the spend is the hard cap, `size` is only a floor. A **SELL** mirrors it: exactly `size` shares leave and you receive at least `size × price`. Measured against Polymarket (they document this nowhere): a BUY priced above the best ask spends the whole `size × price` and returns more than `size` shares — `size: 3` at `price: 0.90` into a ~0.57 book filled **4.74 shares for $2.70**. For an exact share count, price at the best ask from `GET /v1/markets/orderbook/{tokenId}`, never above it.\n\n**Fees.** Takers only. A limit order that rests on the book is charged nothing; one that crosses and fills immediately pays the taker fee on top of the trade — see \"Fee rate\".\n\n**Errors:** `422` local validation or CLOB rejection (Polymarket's message forwarded) · `409` same client_order_id in flight · `502` CLOB unreachable.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token_id\": \"{{tokenId}}\",\n  \"side\": \"buy\",\n  \"price\": \"{{orderPrice}}\",\n  \"size\": \"{{orderSize}}\",\n  \"order_type\": \"GTC\",\n  \"client_order_id\": \"{{clientOrderId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "if (!pm.collectionVariables.get('clientOrderId')) {",
+                  "  pm.collectionVariables.set('clientOrderId', pm.variables.replaceIn('{{$randomUUID}}'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);",
+                  "const j = pm.response.json();",
+                  "if (j.clob_order_id) pm.collectionVariables.set('clobOrderId', j.clob_order_id);",
+                  "pm.test('not a replay', () => j.replayed === false);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "14. List open orders",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "market",
+                  "value": "{{conditionId}}",
+                  "description": "condition id filter",
+                  "disabled": true
+                },
+                {
+                  "key": "asset_id",
+                  "value": "{{tokenId}}",
+                  "description": "token id filter",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Your open orders, live from the CLOB (never the local DB — the CLOB is the source of truth). Scoped to your own API credentials.\n\n**Query:** optional `market`, `asset_id` filters.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);",
+                  "const j = pm.response.json();",
+                  "pm.test('placed order listed', () => j.orders.some(o => o.id === pm.collectionVariables.get('clobOrderId')));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "15. Get the order",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/orders/{{clobOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders",
+                "{{clobOrderId}}"
+              ]
+            },
+            "description": "One order by CLOB id, live passthrough.\n\n**Errors:** `404` unknown id.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "16. Cancel the order → canceled: true",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/orders/{{clobOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders",
+                "{{clobOrderId}}"
+              ]
+            },
+            "description": "Cancels the order. Idempotent-safe by design: an already-gone order is `200 {canceled: false, reason}` — never an error, so retry loops are harmless.\n\n**Errors:** `502` only when the CLOB itself is unreachable.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);",
+                  "pm.test('canceled', () => pm.response.json().canceled === true);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Market order (⚠ real funds — fills immediately)",
+      "description": "A FOK market order TAKES liquidity — it executes against the live book the moment it matches. Keep `marketAmount` tiny (default 1 pUSD). **Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.",
+      "item": [
+        {
+          "name": "17. Place FOK market order",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/orders/market",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders",
+                "market"
+              ]
+            },
+            "description": "Places a fill-or-kill market order.\n\n**Body:** `token_id`, `side`, `amount` — pUSD to spend on BUY, shares to sell on SELL — `order_type` (FOK|FAK), optional `client_order_id` (same replay semantics as limit orders). The audit row stores `price: null` (the book prices it).\n\n**`amount` is the notional, not the debit.** The taker fee is charged on top of `amount`, so more leaves your wallet than you asked to spend — a `$1.00` BUY was debited **$1.0595** in testing. Budget roughly `amount × (1 + fee_rate × (1 − price))` and leave headroom: a BUY for your entire balance is rejected because the fee cannot be covered. See \"Fee rate\".\n\n**Errors:** `422` validation / CLOB rejection (e.g. not enough balance or liquidity) · `502` CLOB unreachable.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token_id\": \"{{tokenId}}\",\n  \"side\": \"buy\",\n  \"amount\": \"{{marketAmount}}\",\n  \"order_type\": \"FOK\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bulk cancels",
+      "description": "Explicit per-scope cancel endpoints (deliberately never DELETE-with-filters, so an empty filter can never mean \"cancel everything\"). All return the CLOB's `{canceled, not_canceled}` verbatim. **Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.",
+      "item": [
+        {
+          "name": "18. Cancel a batch",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/orders/cancel-batch",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders",
+                "cancel-batch"
+              ]
+            },
+            "description": "Cancels a list of orders by CLOB id (min 1). Unknown/already-gone ids come back under `not_canceled` with reasons — not an error.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_ids\": [\n    \"{{clobOrderId}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "19. Cancel all (kill-switch)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/orders/cancel-all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders",
+                "cancel-all"
+              ]
+            },
+            "description": "Cancels ALL of your open orders across every market. The kill-switch.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "20. Cancel one market",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/orders/cancel-market",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "orders",
+                "cancel-market"
+              ]
+            },
+            "description": "Cancels all of your orders in one market.\n\n**Body:** `market` (condition id, required), optional `asset_id` to narrow to one token.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"market\": \"{{conditionId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Trades & balance (read-only)",
+      "description": "Fills and balances, live from the CLOB. **Auth: Onboarded** — Trader/Admin JWT + provisioned credentials + deployed deposit wallet (`require_onboarded_trader`). A missing piece returns one 403 naming what's absent. The credential blob is cached in Redis for the token's lifetime (24 h), re-warmed on every login.",
+      "item": [
+        {
+          "name": "21. Trade history (one page per call)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/trades",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "trades"
+              ],
+              "query": [
+                {
+                  "key": "market",
+                  "value": "{{conditionId}}",
+                  "description": "condition id filter",
+                  "disabled": true
+                },
+                {
+                  "key": "asset_id",
+                  "value": "{{tokenId}}",
+                  "description": "token id filter",
+                  "disabled": true
+                },
+                {
+                  "key": "before",
+                  "value": "",
+                  "description": "unix seconds upper bound",
+                  "disabled": true
+                },
+                {
+                  "key": "after",
+                  "value": "",
+                  "description": "unix seconds lower bound",
+                  "disabled": true
+                },
+                {
+                  "key": "next_cursor",
+                  "value": "",
+                  "description": "cursor from previous page",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Your fills, paginated explicitly — one page per call, pass back `next_cursor` from the previous response for the next page.\n\n**Query:** optional `market` (condition id), `asset_id` (token id), `before`/`after` (unix seconds), `next_cursor`.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "22. Balance & allowance (pUSD)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/balance",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "balance"
+              ],
+              "query": [
+                {
+                  "key": "asset_type",
+                  "value": "collateral",
+                  "description": "collateral (default) | conditional",
+                  "disabled": true
+                },
+                {
+                  "key": "token_id",
+                  "value": "{{tokenId}}",
+                  "description": "required for conditional",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Your deposit wallet's balance and allowance as the order book sees it.\n\n**Query:** `asset_type` = `collateral` (default, pUSD) or `conditional` — conditional also requires `token_id`, else `422`.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "23. Sync balance from on-chain",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/balance/sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "balance",
+                "sync"
+              ],
+              "query": [
+                {
+                  "key": "asset_type",
+                  "value": "collateral",
+                  "description": "collateral (default) | conditional",
+                  "disabled": true
+                },
+                {
+                  "key": "token_id",
+                  "value": "{{tokenId}}",
+                  "description": "required for conditional",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Forces the CLOB to refresh its cached view of your balance from the chain — run after external transfers into the deposit wallet.\n\n**Query:** same `asset_type` / `token_id` semantics as the balance request.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Session end",
+      "description": "Logout invalidates the current token, so run this last.",
+      "item": [
+        {
+          "name": "24. Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "**Auth: Bearer.**\n\nBlacklists this token's `jti` for its remaining lifetime — the single-session logout.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "userEmail",
+      "value": "trader1@example.com",
+      "type": "string"
+    },
+    {
+      "key": "userPassword",
+      "value": "ChangeMe123!",
+      "type": "string"
+    },
+    {
+      "key": "tokenId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "conditionId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "orderPrice",
+      "value": "0.03",
+      "type": "string"
+    },
+    {
+      "key": "orderSize",
+      "value": "34",
+      "type": "string"
+    },
+    {
+      "key": "marketAmount",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "userToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "clientOrderId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "clobOrderId",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
