@@ -1,14 +1,10 @@
-import pandas as pd
 import os
+import pandas as pd
 from datetime import datetime
-
-
 
 def save_snapshots(snapshots, counter):
 
-    timestamp = datetime.now().strftime(
-        "%Y%m%d_%H%M%S"
-    )
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     DATA_DIR = f"data/{timestamp}"
     
@@ -23,3 +19,5 @@ def save_snapshots(snapshots, counter):
         engine="fastparquet",
         index=False
     )
+
+    print('snapshots saved at: ', filename)
