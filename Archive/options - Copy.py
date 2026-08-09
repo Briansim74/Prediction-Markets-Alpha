@@ -3,9 +3,11 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 import matplotlib.pyplot as plt
+# from mpl_toolkits.mplot3d import Axes3D
 from datetime import datetime, timezone
-from scipy.interpolate import RBFInterpolator
 from scipy.interpolate import PchipInterpolator
+from scipy.interpolate import LinearNDInterpolator
+from scipy.interpolate import RBFInterpolator
 
 class OptionSurface:
 
@@ -16,14 +18,13 @@ class OptionSurface:
             weighted_spot = self.get_weighted_spot(currency, exchanges)
             curve_df = self.get_curve_df(currency, exchanges)
             surface_df = self.get_surface(currency, exchanges)
-            f_variance, params = self.build_variance_surface(weighted_spot, surface_df)
+            f_variance = self.build_variance_surface(surface_df)
 
             self.data[currency] = {
                 "weighted_spot": weighted_spot,
                 "curve_df": curve_df,
                 "surface_df": surface_df,
-                "f_variance": f_variance,
-                "params": params
+                "f_variance": f_variance
             }
 
     def get_weighted_spot(self, currency, exchanges):
@@ -58,44 +59,41 @@ class OptionSurface:
         
         return surface_df
 
-    def build_variance_surface(self, weighted_spot, surface_df):
+    # def build_variance_surface(self, surface_df):
+    
+    #     points = np.column_stack([surface_df["strike"], surface_df["T"]])
+    #     values = surface_df["total_variance"]
 
-        K = surface_df["strike"].to_numpy()
-        T = surface_df["T"].to_numpy()
+    #     f_variance = LinearNDInterpolator(points, values)
 
-        # Log-moneyness
-        k = np.log(K / weighted_spot)
+    #     return f_variance
 
-        # Scale coordinates
-        k_mean = k.mean()
-        k_std = k.std()
-        T_mean = T.mean()
-        T_std = T.std()
+    # def build_variance_surface(self, surface_df):
+        
+    #     points = np.column_stack([surface_df["strike"], surface_df["T"]])
+    #     values = surface_df["total_variance"]
 
-        k_scaled = (k - k_mean) / k_std
-        T_scaled = (T - T_mean) / T_std
+    #     f_variance = RBFInterpolator(
+    #         points,
+    #         values,
+    #         kernel="thin_plate_spline"
+    #     )
 
-        query_points = np.column_stack([k_scaled, T_scaled])
+    #     return f_variance
 
-        # Interpolate log(total variance) so the reconstructed
-        # total variance is always positive.
-        log_variance = np.log(surface_df["total_variance"].to_numpy())
+    def build_variance_surface(self, surface_df):
+            
+        points = np.column_stack([surface_df["strike"], surface_df["T"]])
+        values = surface_df["total_variance"]
 
         f_variance = RBFInterpolator(
-            query_points,
-            log_variance,
+            points,
+            values,
             kernel="thin_plate_spline",
             smoothing=0.001
         )
 
-        params = {
-            "k_mean": k_mean,
-            "k_std": k_std,
-            "T_mean": T_mean,
-            "T_std": T_std
-        }
-
-        return f_variance, params
+        return f_variance
 
     def get_iv_from_curve(self, exchange, currency, required_strike):
 
@@ -115,24 +113,18 @@ class OptionSurface:
 
     def get_iv_from_surface(self, exchange, currency, required_strike, T):
 
-        weighted_spot = exchange.data[currency]["weighted_spot"]
         f_variance = exchange.data[currency]["f_variance"]
-        params = exchange.data[currency]["params"]
 
-        k_mean = params["k_mean"]
-        k_std = params["k_std"]
-        T_mean = params["T_mean"]
-        T_std = params["T_std"]
+        print("required_strike:", required_strike, "T:", T)
 
-        k = np.log(required_strike / weighted_spot)
+        # total_variance = f_variance(required_strike, T)
 
-        k_scaled = (k - k_mean) / k_std
-        T_scaled = (T - T_mean) / T_std
+        total_variance = f_variance(np.array([[required_strike, T]]))[0]
+        total_variance = np.maximum(total_variance, 0)
 
-        query_points = [[k_scaled, T_scaled]]
+        if np.isnan(total_variance):
+            return None
 
-        log_variance = f_variance(query_points)[0]
-        total_variance = np.exp(log_variance)
 
         iv = np.sqrt(total_variance / T)
 
@@ -156,15 +148,7 @@ class OptionSurface:
 
     def plot_surface(self, exchange, currency):
 
-        weighted_spot = exchange.data[currency]["weighted_spot"]
         surface_df = exchange.data[currency]["surface_df"]
-        f_variance = exchange.data[currency]["f_variance"]
-        params = exchange.data[currency]["params"]
-        
-        k_mean = params["k_mean"]
-        k_std = params["k_std"]
-        T_mean = params["T_mean"]
-        T_std = params["T_std"]
 
         fig = plt.figure(figsize=(10, 7))
         
@@ -172,26 +156,21 @@ class OptionSurface:
 
         # Create grid
         strike_grid = np.linspace(surface_df["strike"].min(), surface_df["strike"].max(), 50)
+
         T_grid = np.linspace(surface_df["T"].min(), surface_df["T"].max(), 50)
 
         X, Y = np.meshgrid(strike_grid, T_grid)
 
-        K = X.ravel()
-        T = Y.ravel()
-        
-        # --------------------------------
-        # Apply SAME scaling as training
-        # --------------------------------
-        k = np.log(K / weighted_spot)
-
-        k_scaled = (k - k_mean) / k_std
-        T_scaled = (T - T_mean) / T_std
-
-        query_points = np.column_stack([k_scaled, T_scaled])
+        query_points = np.column_stack([
+            X.ravel(),
+            Y.ravel()
+        ])
 
         # Query interpolator
-        log_variance_grid = f_variance(query_points).reshape(X.shape)
-        variance_grid = np.exp(log_variance_grid)
+        f_variance = exchange.data[currency]["f_variance"]
+        # variance_grid = f_variance(X, Y)
+        variance_grid = f_variance(query_points).reshape(X.shape)
+        variance_grid = np.maximum(variance_grid, 0)
 
         print("variance min:", np.nanmin(variance_grid))
         print("variance max:", np.nanmax(variance_grid))
