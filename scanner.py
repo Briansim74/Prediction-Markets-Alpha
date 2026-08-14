@@ -77,8 +77,8 @@ class MarketScanner:
             timezone.utc)).dt.total_seconds() / (365.25 * 24 * 3600)
         markets_df = markets_df[markets_df["T"] > 0]
 
-        markets_df[["iv", "model_prob", "buy_yes_ev", "sell_yes_ev", "buy_no_ev", "sell_no_ev",
-            "buy_yes_fee", "sell_yes_fee", "buy_no_fee", "sell_no_fee",
+        markets_df[["iv", "model_prob", "buy_yes_fee", "sell_yes_fee", "buy_no_fee", "sell_no_fee",
+            "buy_yes_ev", "sell_yes_ev", "buy_no_ev", "sell_no_ev",
             "buy_yes_kelly", "sell_yes_kelly", "buy_no_kelly", "sell_no_kelly"]] = markets_df.apply(
             lambda row: self.calculate_market_ev(row, s), axis=1)
 
@@ -117,9 +117,12 @@ class MarketScanner:
 
     def get_books(self, row):
 
-        yes_book = self.api.get_orderbook(row.yes_token)
-        no_book = self.api.get_orderbook(row.no_token)
+        # yes_book = self.api.get_orderbook(row.yes_token)
+        # no_book = self.api.get_orderbook(row.no_token)
 
+        yes_book = self.api.orderbook(row["yes_token"])
+        no_book = self.api.orderbook(row["no_token"])
+        
         return pd.Series({
             "yes_book": yes_book,
             "no_book": no_book,
@@ -346,7 +349,7 @@ class MarketScanner:
             sell_no_ev = np.nan
             buy_no_kelly = np.nan
             sell_no_kelly = np.nan
-
+        
         print("buy_yes_ev:", buy_yes_ev)
         print("sell_yes_ev:", sell_yes_ev)
         print("buy_no_ev:", buy_no_ev)
