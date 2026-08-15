@@ -19,7 +19,7 @@ Sell Yes EV               : 0.01693527
 Unrealized Pnl            : 0.08260912933218019
 Cash                      : 100.0
 ENTRY EV threshold        : 0.01
-MIN Position threshold    : 0.05
+MAX Position threshold    : 0.05
 ======================================================================
                          VARIABLES IN REQUEST                         
 tokenId                   : 96993471854400156408670527613150944443359272190785251193551242374636006072800

@@ -1,5 +1,8 @@
+import os
+import glob
 import uuid
 import requests
+import pandas as pd
 from decimal import Decimal
 
 class TradingDeskAPI:
@@ -46,42 +49,94 @@ class TradingDeskAPI:
     # # -----------------------------------------------------
     # # Non authenticated functions
     # # -----------------------------------------------------
+    def get_all_markets(self, DATA_DIR, count_limit=20, liquidity_num_min=10000, volume_num_min=5000):
 
-    def get_markets(self, limit=10000, liquidity_num_min=10000, volume_num_min=5000):
+        url = "https://gamma-api.polymarket.com/markets/keyset"
 
-        url = "https://gamma-api.polymarket.com/markets"
-        params = {
-                "limit": limit,
+        after_cursor = None
+        total_markets = 0
+
+        for count in range(count_limit):
+            params = {
+                "limit": 500,
                 "active": "true",
                 "closed": "false",
-                "order": "liquidity", # sorted by highest liquidity first
-                "ascending": "false",
                 "liquidity_num_min": liquidity_num_min,
-                "volume_num_min": volume_num_min
+                "volume_num_min": volume_num_min,
+                "include_tag": "true",
             }
 
-        r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
+            if after_cursor:
+                params["after_cursor"] = after_cursor
 
-        return r.json()
+            r = requests.get(url, params=params, timeout=30)
+            r.raise_for_status()
 
-    def get_orderbook(self, token_id):
+            data = r.json()
 
-        url = "https://clob.polymarket.com/book"
-        params = {"token_id": token_id}
+            # print(data)
+            markets = data.get("markets", [])
 
-        r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
+            if not markets:
+                break
 
-        return r.json()
+            # Convert ONLY this batch to DataFrame and save immediately
+            df = pd.DataFrame(markets)
+            filename = f"{DATA_DIR}/markets_{count:05d}.parquet"
+            df.to_parquet(filename, index=False)
 
-     # =====================================================
+            total_markets += len(markets)
+
+            print(f"Fetched {len(markets):,} markets | Total: {total_markets:,}")
+
+            after_cursor = data.get("next_cursor")
+
+            if not after_cursor:
+                break
+
+        parquet_files = glob.glob(f"{DATA_DIR}/markets_*.parquet")
+
+        all_markets_df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
+
+        # Delete parquet files after successful concat
+        for f in parquet_files:
+            os.remove(f)
+
+        return all_markets_df
+
+    # def get_markets(self, limit=10000, liquidity_num_min=10000, volume_num_min=5000):
+
+    #     url = "https://gamma-api.polymarket.com/markets"
+    #     params = {
+    #             "limit": limit,
+    #             "active": "true",
+    #             "closed": "false",
+    #             "order": "liquidity", # sorted by highest liquidity first
+    #             "ascending": "false",
+    #             "liquidity_num_min": liquidity_num_min,
+    #             "volume_num_min": volume_num_min,
+    #             "include_tag": "true",
+    #         }
+
+    #     r = requests.get(url, params=params, timeout=10)
+    #     r.raise_for_status()
+
+    #     return r.json()
+
+    # def get_orderbook(self, token_id):
+
+    #     url = "https://clob.polymarket.com/book"
+    #     params = {"token_id": token_id}
+
+    #     r = requests.get(url, params=params, timeout=10)
+    #     r.raise_for_status()
+
+    #     return r.json()
+
+    # =====================================================
     # LIMIT ORDERS - TEST
     # =====================================================
 
-    # -----------------------------------------------------
-    # 13. Place limit order
-    # -----------------------------------------------------
     def place_limit_order_test(
             self,
             token_id,
@@ -102,37 +157,9 @@ class TradingDeskAPI:
             "replayed": False
         }
 
-    def get_positions(self, positions_df, markets_df):
-
-        positions = []
-
-        for _, row in positions_df.iterrows():
-            condition_id = row["condition_id"]
-            token_id = row["token_id"]
-
-            balance = self.balance(
-                asset_type="conditional",
-                token_id=token_id
-            )
-
-            shares = float(balance["balance"])
-
-            if shares > 0:
-                positions.append({
-                    "condition_id": condition_id,
-                    "token_id": token_id,
-                    "question": markets_df.loc[markets_df["conditionId"] == condition_id, "question"].iloc[0],
-                    "outcome": row["outcome"],
-                    "shares": shares,
-                })
-
-        return positions
-
-    def get_tick_size(self, token_id):
-
-        print("{ TEST } - GET TICK SIZE")
-
-        return 0.01
+    # -----------------------------------------------------
+    # Quantity Normalization
+    # -----------------------------------------------------
 
     def round_to_tick(self, price, tick):
 
@@ -597,3 +624,99 @@ class TradingDeskAPI:
         self.token = None
 
         return result
+
+    # -----------------------------------------------------
+    # MISC
+    # -----------------------------------------------------
+
+    def get_all_tags(self):
+        url = "https://gamma-api.polymarket.com/tags"
+
+        all_tags = []
+        offset = 0
+        limit = 100
+
+        while True:
+            params = {
+                "limit": limit,
+                "offset": offset,
+            }
+
+            r = requests.get(
+                url,
+                params=params,
+                timeout=30,
+            )
+            r.raise_for_status()
+
+            tags = r.json()
+
+            if not tags:
+                break
+
+            all_tags.extend(tags)
+
+            # print(
+            #     f"Fetched {len(tags)} tags | "
+            #     f"Total: {len(all_tags)}"
+            # )
+
+            if len(tags) < limit:
+                break
+
+            offset += limit
+
+        return all_tags
+
+    def get_crypto_tags(self, all_tags):
+
+        CRYPTO_TAGS = {
+            "crypto",
+            "bitcoin",
+            "btc",
+            "ethereum",
+            "eth",
+            "solana",
+            "dogecoin",
+            "doge",
+            "xrp",
+            "ripple",
+            "cardano",
+            "ada",
+            "avalanche",
+            "avax",
+            "chainlink",
+            "link",
+            "polygon",
+            "matic",
+            "bnb",
+            "binance",
+            "altcoin",
+            "altcoins",
+            "defi",
+            "nft",
+            "nfts",
+            "stablecoin",
+            "stablecoins",
+            "memecoin",
+            "memecoins",
+            "cryptopunks",
+        }
+
+        all_tags = self.get_all_tags()
+
+        crypto_tags = [tag for tag in all_tags if(
+                tag.get("label", "").lower() in CRYPTO_TAGS
+                or tag.get("slug", "").lower() in CRYPTO_TAGS
+            )]
+
+        for tag in crypto_tags:
+            print(
+                tag["id"],
+                tag["label"],
+                tag["slug"],
+            )
+
+        crypto_tag_ids = [tag["id"] for tag in crypto_tags]
+
+        return crypto_tag_ids

@@ -1,16 +1,105 @@
 import re
+import os
 import json
 import calendar
+from dateutil import parser
+from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor
+
+import requests
 import numpy as np
 import pandas as pd
-from dateutil import parser
+from scipy.stats import norm
+import matplotlib.pyplot as plt
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor
+from scipy.interpolate import RBFInterpolator
+from scipy.interpolate import PchipInterpolator
+
+from api_client import TradingDeskAPI
 
 class MarketScanner:
 
-    def __init__(self, api):
+    def __init__(self, api, BASE_URL, USER_EMAIL, USER_PASSWORD):
         self.api = api
+
+    def scan_market_old(self, markets_df, s, KEYWORDS):
+    
+        markets_df = markets_df[
+            (markets_df["acceptingOrders"] == True) &
+            (markets_df["enableOrderBook"] == True)
+        ]
+        
+        markets_df = markets_df[markets_df.apply(
+            lambda row: self.is_market_keyword(row, KEYWORDS), axis = 1)]
+        
+        CURRENCIES = {
+            "bitcoin": "BTC",
+            "btc": "BTC",
+            "ethereum": "ETH",
+            "eth": "ETH",
+            "solana": "SOL",
+            "sol": "SOL",
+            "xrp": "XRP",
+            "dogecoin": "DOGE",
+            "doge": "DOGE",
+        }
+
+        markets_df["currency"] = markets_df.apply(
+            lambda row: self.extract_currency(row, CURRENCIES), axis=1)
+
+        markets_df["tokens"] = markets_df["clobTokenIds"].apply(json.loads)
+        markets_df["yes_token"] = markets_df["tokens"].apply(lambda x: x[0])
+        markets_df["no_token"] = markets_df["tokens"].apply(lambda x: x[1])
+
+        book_cols = [
+            "yes_book",
+            "no_book",
+            "yes_bid",
+            "yes_ask",
+            "no_bid",
+            "no_ask",
+        ]
+
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            markets_df[book_cols] = list(executor.map(
+                self.get_books_old, (row for _, row in markets_df.iterrows())))
+
+        markets_df["strike"] = markets_df.question.apply(self.extract_strike)
+        markets_df["expiry"] = markets_df.apply(
+            lambda row: self.extract_expiry(row["question"], row["slug"]), axis=1)
+
+        markets_df[["direction", "event_type"]] = markets_df["question"].apply(
+            lambda x: pd.Series(self.parse_crypto_market_type(x))
+        )
+
+        markets_df["expiry_dt"] = pd.to_datetime(markets_df["expiry"], format="%Y%m%d", utc=True)
+        markets_df["T"] = (markets_df["expiry_dt"] - datetime.now(
+            timezone.utc)).dt.total_seconds() / (365.25 * 24 * 3600)
+        markets_df = markets_df[markets_df["T"] > 0]
+
+        markets_df[["iv", "model_prob", "buy_yes_fee", "sell_yes_fee", "buy_no_fee", "sell_no_fee",
+            "buy_yes_ev", "sell_yes_ev", "buy_no_ev", "sell_no_ev",
+            "buy_yes_kelly", "sell_yes_kelly", "buy_no_kelly", "sell_no_kelly"]] = markets_df.apply(
+            lambda row: self.calculate_market_ev(row, s), axis=1)
+
+        markets_df = markets_df.dropna(subset=["buy_yes_ev"])
+
+        ev_cols = [
+            "buy_yes_ev",
+            "sell_yes_ev",
+            "buy_no_ev",
+            "sell_no_ev"
+        ]
+
+        markets_df["best_ev"] = markets_df[ev_cols].max(axis=1)
+        markets_df["best_action"] = markets_df[ev_cols].idxmax(axis=1)
+
+        opportunities_df = markets_df[markets_df["best_ev"] > 0].sort_values("best_ev", ascending=False)
+
+        self.markets_df = markets_df
+        self.opportunities_df = opportunities_df
+
+        return self.markets_df, self.opportunities_df
 
     def scan_market(self, markets_df, s, crypto_tag_ids):
 
@@ -22,31 +111,20 @@ class MarketScanner:
         markets_df = markets_df[markets_df["tags"].apply(lambda tags: any(
             str(tag["id"]) in crypto_tag_ids for tag in tags))].copy()
         
-        # CURRENCIES = {
-        #     "bitcoin": "BTC",
-        #     "btc": "BTC",
-        #     "ethereum": "ETH",
-        #     "eth": "ETH",
-        #     "solana": "SOL",
-        #     "sol": "SOL",
-        #     "xrp": "XRP",
-        #     "dogecoin": "DOGE",
-        #     "doge": "DOGE",
-        #     "hyperliquid": "HYPE",
-        #     "zcash": "ZEC"
-        # }
-
         CURRENCIES = {
             "bitcoin": "BTC",
             "btc": "BTC",
             "ethereum": "ETH",
             "eth": "ETH",
+            "solana": "SOL",
+            "sol": "SOL",
+            "xrp": "XRP",
+            "dogecoin": "DOGE",
+            "doge": "DOGE",
         }
 
         markets_df["currency"] = markets_df.apply(
             lambda row: self.extract_currency(row, CURRENCIES), axis=1)
-
-        markets_df = markets_df.dropna(subset=["currency"])
 
         markets_df["tokens"] = markets_df["clobTokenIds"].apply(json.loads)
         markets_df["yes_token"] = markets_df["tokens"].apply(lambda x: x[0])
@@ -115,6 +193,25 @@ class MarketScanner:
                 return currency
 
         return None
+
+    def get_books_old(self, row):
+
+        # yes_book = self.api.get_orderbook(row.yes_token)
+        # no_book = self.api.get_orderbook(row.no_token)
+
+        yes_book = self.api.orderbook(row["yes_token"])
+        no_book = self.api.orderbook(row["no_token"])
+        
+        return pd.Series({
+            "yes_book": yes_book,
+            "no_book": no_book,
+
+            "yes_bid": float(yes_book["bids"][-1]["price"]) if yes_book["bids"] else None,
+            "yes_ask": float(yes_book["asks"][-1]["price"]) if yes_book["asks"] else None,
+
+            "no_bid": float(no_book["bids"][-1]["price"]) if no_book["bids"] else None,
+            "no_ask": float(no_book["asks"][-1]["price"]) if no_book["asks"] else None,
+        })
 
     def get_books(self, row):
 
@@ -280,12 +377,7 @@ class MarketScanner:
         def is_valid(price):
             return pd.notna(price)
 
-        # def fee(price):
-        #     #fee = C × feeRate × p × (1 - p)
-        #     #Where C = number of shares traded and p = price of the shares.
-        #     return fee_rate * price * (1 - price)
-
-        def fee(price, fee_rate):
+        def fee(price):
             #fee = C × feeRate × p × (1 - p)
             #Where C = number of shares traded and p = price of the shares.
             return fee_rate * price * (1 - price)
@@ -297,7 +389,7 @@ class MarketScanner:
         # BUY YES
         # -------------------------
         if is_valid(best_ask_yes):
-            buy_yes_cost = best_ask_yes + fee(best_ask_yes, fee_rate)
+            buy_yes_cost = best_ask_yes + fee(best_ask_yes)
 
             profit_if_yes = 1 - buy_yes_cost
             cost_if_no = buy_yes_cost
@@ -318,7 +410,7 @@ class MarketScanner:
             # -------------------------
             # SELL YES (short YES)
             # -------------------------
-            sell_yes_credit = best_bid_yes - fee(best_bid_yes, fee_rate)
+            sell_yes_credit = best_bid_yes - fee(best_bid_yes)
 
             profit_if_no = sell_yes_credit
             cost_if_yes = 1 - sell_yes_credit # need to pay the remaining of the $1 out of the credit you got, if yes happened
@@ -338,7 +430,7 @@ class MarketScanner:
         # BUY NO
         # -------------------------
         if is_valid(best_ask_no):
-            buy_no_cost = best_ask_no + fee(best_ask_no, fee_rate)
+            buy_no_cost = best_ask_no + fee(best_ask_no)
 
             profit_if_no = 1 - buy_no_cost
             cost_if_yes = buy_no_cost
@@ -350,7 +442,7 @@ class MarketScanner:
             # -------------------------
             # SELL NO (short NO)
             # -------------------------
-            sell_no_credit = best_bid_no - fee(best_bid_no, fee_rate)
+            sell_no_credit = best_bid_no - fee(best_bid_no)
 
             profit_if_yes = sell_no_credit
             cost_if_no = 1 - sell_no_credit
@@ -375,10 +467,10 @@ class MarketScanner:
         print("sell_no_kelly:", sell_no_kelly)
 
         return {
-            "buy_yes_fee": fee(best_ask_yes, fee_rate),
-            "sell_yes_fee": fee(best_bid_yes, fee_rate),
-            "buy_no_fee": fee(best_ask_no, fee_rate),
-            "sell_no_fee": fee(best_bid_no, fee_rate),
+            "buy_yes_fee": fee(best_ask_yes),
+            "sell_yes_fee": fee(best_bid_yes),
+            "buy_no_fee": fee(best_ask_no),
+            "sell_no_fee": fee(best_bid_no),
             "buy_yes_ev": buy_yes_ev,
             "sell_yes_ev": sell_yes_ev,
             "buy_no_ev": buy_no_ev,

@@ -1,0 +1,139 @@
+TRADE #001
+Date: 2026-08-14
+
+============================================================
+MARKET
+============================================================
+
+Market:
+Will Bitcoin reach $200,000 by December 31, 2026?
+
+Asset: BTC
+Event Type: Touch
+Direction: NO
+Expiry: 2026-12-31
+
+============================================================
+THESIS
+============================================================
+
+Thesis:
+BTC is extremely unlikely to touch $200,000 before expiry
+relative to the price implied by the prediction market.
+
+The options-derived probability model estimates:
+
+P(touch) = 0.076%
+
+while the executable prediction-market price implies a
+materially higher probability.
+
+The NO contract therefore appears mispriced.
+
+============================================================
+ENTRY
+============================================================
+
+YES Ask: $0.981
+NO Ask: $0.981
+
+P(Model YES): 0.00076
+P(Model NO): 0.99924
+
+Buy NO EV: 1.6935%
+Entry EV Threshold: 1.00%
+
+Decision: BUY NO
+
+Order Size: 4.877934 contracts
+Starting Equity: $100
+Portfolio Allocation: ~4.88%
+
+Fractional Kelly: 25%
+Maximum Position: 5%
+
+Order Type: GTC LIMIT
+
+============================================================
+WHY MISPRICED?
+============================================================
+
+Model probability:
+P(touch) = 0.076%
+
+Market-implied probability:
+~1.9%
+
+The model therefore estimates substantially less probability
+of the BTC $200k touch than the executable market price implies.
+
+BTC's max is $126,210.50 USD. highly unlikely given current price as well, of 65000 USD.
+
+Primary source of edge:
+Options-implied volatility / distribution versus prediction-
+market pricing.
+
+============================================================
+RISK
+============================================================
+
+Primary risk:
+BTC volatility or price dynamics are materially different
+from the model assumptions.
+
+Thesis invalidation:
+- Model probability rises materially
+- NO EV falls below exit threshold
+- Market reprices toward model fair value
+- Volatility surface changes materially
+- Better capital allocation opportunity appears
+
+(Exit EV - Hold EV Threshold): 2.00%
+
+============================================================
+EXECUTION
+============================================================
+
+Order ID:
+019fff60-088b-7c83-9713-f9cece2ef518
+
+Price: $0.981
+Requested Size: 4.877934
+
+Status: Submitted
+CLOB Status: Matched
+
+============================================================
+POST-TRADE
+============================================================
+
+[Complete after exit]
+
+Exit Date:
+Exit Price:
+Exit Reason:
+
+Realized P&L:
+Fees:
+Holding Period:
+
+Exit Model Probability:
+Exit EV:
+
+Maximum Favorable Excursion:
+Maximum Adverse Excursion:
+
+Was the thesis correct?
+Was the probability estimate reasonable?
+Was the market actually mispriced?
+Was execution satisfactory?
+Was sizing appropriate?
+
+Would I take this trade again with the information available
+at entry?
+
+============================================================
+LESSON
+============================================================
+
+[Complete after exit]

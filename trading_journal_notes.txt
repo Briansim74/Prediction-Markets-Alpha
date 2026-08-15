@@ -1,0 +1,140 @@
+id 573656
+question Will Bitcoin hit $150k by December 31, 2026?
+conditionId 0x02deb9538f5c123373adaa4ee6217b01745f1662bc902e46ac92f3fe6f8741e8
+slug will-bitcoin-hit-150k-by-december-31-2026
+resolutionSource 
+endDate 2027-01-01T05:00:00Z
+liquidity 188955.98603
+startDate 2025-08-07T16:29:32.879Z
+image https://polymarket-upload.s3.us-east-2.amazonaws.com/BTC+fullsize.png
+icon https://polymarket-upload.s3.us-east-2.amazonaws.com/BTC+fullsize.png
+description This market will immediately resolve to "Yes" if any Binance 1 minute candle for Bitcoin (BTC/USDT) has a final "High" price equal to or greater than the price specified in the title by 11:59PM ET on the date specified in the title. Otherwise, this market will resolve to "No."
+
+The resolution source for this market is Binance, specifically the BTC/USDT "High" prices available at https://www.binance.com/en/trade/BTC_USDT, with the chart settings on "1m" for one-minute candles selected on the top bar.
+
+Please note that the outcome of this market depends solely on the price data from the Binance BTC/USDT trading pair. Prices from other exchanges, different trading pairs, or spot markets will not be considered for the resolution of this market.
+outcomes ["Yes", "No"]
+outcomePrices ["0.03", "0.97"]
+volume 2745305.107172999
+active True
+closed False
+marketMakerAddress 0x425589857884EB29738051F17b79BDc29d2BFb89
+createdAt 2025-08-07T14:34:08.095389Z
+updatedAt 2026-08-15T14:12:05.863575Z
+new False
+featured False
+submitted_by 0x91430CaD2d3975766499717fA0D66A78D814E5c5
+archived False
+resolvedBy 0x157Ce2d672854c848c9b79C49a8Cc6cc89176a49
+restricted True
+groupItemTitle by December 31, 2026
+groupItemThreshold 4
+questionID 0x5ffb6001758f989dc5a6a9ce6dd78554784e022036e2e7dab37038add592f2a8
+enableOrderBook True
+orderPriceMinTickSize 0.001
+orderMinSize 5
+volumeNum 2745305.107172999
+liquidityNum 188955.98603
+endDateIso 2027-01-01
+startDateIso 2025-08-07
+hasReviewedDates True
+volume24hr 102.024638
+volume1wk 11945.959815
+volume1mo 122522.99762600003
+volume1yr 2744935.130232
+clobTokenIds ["93694900555669388759405753550770573998169287228984912881955464376232163096213", "55119388124180116303253993098894090042427725500010038140578121972388485050538"]
+positionIds None
+comboStatus disabled
+umaBond 500
+umaReward 5
+volume24hrClob 102.024638
+volume1wkClob 11945.959815
+volume1moClob 122522.99762600003
+volume1yrClob 2744935.130232
+volumeClob 2745305.107172999
+liquidityClob 188955.98603
+makerBaseFee 1000.0
+takerBaseFee 1000.0
+customLiveness 0
+acceptingOrders True
+negRisk False
+negRiskRequestID 
+events [{'id': '36173', 'ticker': 'when-will-bitcoin-hit-150k', 'slug': 'when-will-bitcoin-hit-150k', 'title': 'When will Bitcoin hit $150k?', 'description': 'When will Bitcoin hit $150k', 'resolutionSource': '', 'startDate': '2025-08-07T16:29:22.979697Z', 'creationDate': '2025-08-07T16:32:57.40153Z', 'endDate': '2027-01-01T05:00:00Z', 'image': 'https://polymarket-upload.s3.us-east-2.amazonaws.com/BTC+fullsize.png', 'icon': 'https://polymarket-upload.s3.us-east-2.amazonaws.com/BTC+fullsize.png', 'active': True, 'closed': False, 'archived': False, 'new': False, 'featured': False, 'restricted': True, 'liquidity': 188955.56603, 'volume': 27146826.714345008, 'openInterest': 273868.084636, 'sortBy': None, 'createdAt': '2025-08-07T14:34:05.316535Z', 'updatedAt': '2026-08-15T14:12:29.469788Z', 'competitive': 0.8190679007289704, 'volume24hr': 102.024638, 'volume1wk': 340919.04032499995, 'volume1mo': 1007951.8245360011, 'volume1yr': 5080072.351757002, 'enableOrderBook': True, 'liquidityClob': 188955.56603, 'negRisk': False, 'negRiskMarketID': None, 'commentCount': 77, 'cyom': False, 'showAllOutcomes': True, 'showMarketImages': False, 'enableNegRisk': False, 'automaticallyActive': True, 'startTime': None, 'gmpChartMode': 'default', 'negRiskAugmented': False, 'countryName': None, 'electionType': None, 'featuredOrder': None, 'estimateValue': None, 'cumulativeMarkets': False, 'pendingDeployment': False, 'deploying': False, 'deployingTimestamp': None, 'requiresTranslation': False, 'eventMetadata': {'context_description': None, 'context_requires_regen': True, 'context_updated_at': None}, 'version': 'v1', 'series': None, 'seriesSlug': None, 'closedTime': None, 'automaticallyResolved': None}]
+ready False
+funded False
+acceptingOrdersTimestamp 2025-08-07T16:29:13Z
+tags [{'id': '21', 'label': 'Crypto', 'slug': 'crypto', 'createdAt': '2023-11-02T21:03:54.564Z', 'updatedAt': '2026-03-09T22:28:03.349847Z', 'requiresTranslation': False, 'forceShow': False, 'publishedAt': '2023-11-02 21:03:54.55+00', 'isCarousel': None, 'updatedBy': 15.0, 'forceHide': None, 'createdBy': None}
+ {'id': '235', 'label': 'Bitcoin', 'slug': 'bitcoin', 'createdAt': '2023-11-02T21:40:32.974Z', 'updatedAt': '2026-04-17T20:39:34.210222Z', 'requiresTranslation': False, 'forceShow': True, 'publishedAt': '2023-11-02 21:40:32.968+00', 'isCarousel': None, 'updatedBy': 15.0, 'forceHide': None, 'createdBy': None}
+ {'id': '1312', 'label': 'Crypto Prices', 'slug': 'crypto-prices', 'createdAt': '2024-02-12T22:34:50.962Z', 'updatedAt': '2026-04-17T20:52:10.030771Z', 'requiresTranslation': False, 'forceShow': True, 'publishedAt': '2024-02-12 22:36:40.783+00', 'isCarousel': None, 'updatedBy': 15.0, 'forceHide': None, 'createdBy': 15.0}
+ {'id': '105299', 'label': 'Price Milestone', 'slug': 'price-milestone', 'createdAt': '2026-06-09T20:55:08.633849Z', 'updatedAt': '2026-06-09T21:00:03.312265Z', 'requiresTranslation': False, 'forceShow': None, 'publishedAt': None, 'isCarousel': None, 'updatedBy': None, 'forceHide': None, 'createdBy': None}]
+cyom False
+competitive 0.8190679007289704
+pagerDutyNotificationEnabled False
+approved True
+clobRewards [{'id': '350399', 'conditionId': '0x02deb9538f5c123373adaa4ee6217b01745f1662bc902e46ac92f3fe6f8741e8', 'assetAddress': '0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb', 'rewardsAmount': 0, 'rewardsDailyRate': 0.001, 'startDate': '2026-05-15', 'endDate': '2500-12-31'}]
+rewardsMinSize 0
+rewardsMaxSpread 0.0
+spread 0.002
+oneWeekPriceChange -0.0055
+oneMonthPriceChange -0.0075
+oneYearPriceChange -0.72
+lastTradePrice 0.03
+bestBid 0.029
+bestAsk 0.031
+automaticallyActive True
+clearBookOnStart True
+manualActivation False
+negRiskOther False
+umaResolutionStatuses []
+pendingDeployment False
+deploying False
+deployingTimestamp 2025-08-07T16:28:24.298673Z
+rfqEnabled False
+holdingRewardsEnabled False
+feesEnabled True
+requiresTranslation False
+feeType crypto_fees_v2
+feeSchedule {'exponent': 1.0, 'rate': 0.07, 'takerOnly': True, 'rebateRate': 0.2}
+version v1
+negRiskMarketID nan
+oneDayPriceChange -0.0015
+seriesColor 
+showGmpSeries False
+showGmpOutcome False
+umaResolutionStatus nan
+oneHourPriceChange nan
+eventStartTime nan
+gameStartTime nan
+groupItemRange nan
+currency BTC
+tokens ['93694900555669388759405753550770573998169287228984912881955464376232163096213', '55119388124180116303253993098894090042427725500010038140578121972388485050538']
+yes_token 93694900555669388759405753550770573998169287228984912881955464376232163096213
+no_token 55119388124180116303253993098894090042427725500010038140578121972388485050538
+yes_book {'market': '0x02deb9538f5c123373adaa4ee6217b01745f1662bc902e46ac92f3fe6f8741e8', 'asset_id': '93694900555669388759405753550770573998169287228984912881955464376232163096213', 'timestamp': '1786803263001', 'hash': 'ddc0c0fdc3cd9ecf8149f592529e7a194eda3053', 'bids': [{'price': '0.001', 'size': '221403.54'}, {'price': '0.002', 'size': '27633.11'}, {'price': '0.003', 'size': '13044.58'}, {'price': '0.004', 'size': '7500'}, {'price': '0.005', 'size': '6586.74'}, {'price': '0.006', 'size': '833.3'}, {'price': '0.007', 'size': '714.2'}, {'price': '0.008', 'size': '625'}, {'price': '0.009', 'size': '675.49'}, {'price': '0.01', 'size': '1700'}, {'price': '0.011', 'size': '2238.3'}, {'price': '0.012', 'size': '833.3'}, {'price': '0.014', 'size': '80'}, {'price': '0.017', 'size': '3199.98'}, {'price': '0.018', 'size': '655'}, {'price': '0.019', 'size': '2577.95'}, {'price': '0.02', 'size': '368.16'}, {'price': '0.021', 'size': '51.5'}, {'price': '0.023', 'size': '70.5'}, {'price': '0.024', 'size': '22.9'}, {'price': '0.025', 'size': '20.1'}, {'price': '0.028', 'size': '10.46'}, {'price': '0.029', 'size': '213.85'}], 'asks': [{'price': '0.999', 'size': '6161.95'}, {'price': '0.998', 'size': '3026.15'}, {'price': '0.997', 'size': '2679.98'}, {'price': '0.996', 'size': '8.78'}, {'price': '0.99', 'size': '1020100'}, {'price': '0.989', 'size': '6.91'}, {'price': '0.98', 'size': '115'}, {'price': '0.974', 'size': '7'}, {'price': '0.97', 'size': '60000'}, {'price': '0.969', 'size': '5.4'}, {'price': '0.95', 'size': '50'}, {'price': '0.92', 'size': '3000'}, {'price': '0.919', 'size': '6'}, {'price': '0.918', 'size': '5.92'}, {'price': '0.9', 'size': '87.73'}, {'price': '0.89', 'size': '1006'}, {'price': '0.8', 'size': '65625'}, {'price': '0.79', 'size': '30006'}, {'price': '0.78', 'size': '227'}, {'price': '0.779', 'size': '800'}, {'price': '0.76', 'size': '6000'}, {'price': '0.75', 'size': '42.85'}, {'price': '0.749', 'size': '6.84'}, {'price': '0.69', 'size': '6'}, {'price': '0.65', 'size': '20'}, {'price': '0.6', 'size': '30468.75'}, {'price': '0.59', 'size': '6'}, {'price': '0.5', 'size': '20640'}, {'price': '0.49', 'size': '3000'}, {'price': '0.4', 'size': '15625'}, {'price': '0.39', 'size': '6000'}, {'price': '0.389', 'size': '2000'}, {'price': '0.336', 'size': '6'}, {'price': '0.3', 'size': '99.99'}, {'price': '0.29', 'size': '3555.43'}, {'price': '0.27', 'size': '14'}, {'price': '0.25', 'size': '100'}, {'price': '0.24', 'size': '100'}, {'price': '0.21', 'size': '89.85'}, {'price': '0.15', 'size': '45'}, {'price': '0.1', 'size': '66.3'}, {'price': '0.099', 'size': '845.64'}, {'price': '0.09', 'size': '1210.97'}, {'price': '0.086', 'size': '25'}, {'price': '0.08', 'size': '1210.97'}, {'price': '0.074', 'size': '100000'}, {'price': '0.07', 'size': '713.43'}, {'price': '0.06', 'size': '713.44'}, {'price': '0.049', 'size': '281.91'}, {'price': '0.042', 'size': '500'}, {'price': '0.041', 'size': '200'}, {'price': '0.039', 'size': '4632.75'}, {'price': '0.037', 'size': '1034.14'}, {'price': '0.036', 'size': '100'}, {'price': '0.035', 'size': '8863.46'}, {'price': '0.034', 'size': '77'}, {'price': '0.032', 'size': '222.5'}, {'price': '0.031', 'size': '1346.82'}], 'min_order_size': '5', 'tick_size': '0.001', 'neg_risk': False, 'last_trade_price': '0.029'}
+no_book {'market': '0x02deb9538f5c123373adaa4ee6217b01745f1662bc902e46ac92f3fe6f8741e8', 'asset_id': '55119388124180116303253993098894090042427725500010038140578121972388485050538', 'timestamp': '1786803263001', 'hash': 'd0300dc369fc35ed7e9811aea92cf6417ab9cbb6', 'bids': [{'price': '0.001', 'size': '6161.95'}, {'price': '0.002', 'size': '3026.15'}, {'price': '0.003', 'size': '2679.98'}, {'price': '0.004', 'size': '8.78'}, {'price': '0.01', 'size': '1020100'}, {'price': '0.011', 'size': '6.91'}, {'price': '0.02', 'size': '115'}, {'price': '0.026', 'size': '7'}, {'price': '0.03', 'size': '60000'}, {'price': '0.031', 'size': '5.4'}, {'price': '0.05', 'size': '50'}, {'price': '0.08', 'size': '3000'}, {'price': '0.081', 'size': '6'}, {'price': '0.082', 'size': '5.92'}, {'price': '0.1', 'size': '87.73'}, {'price': '0.11', 'size': '1006'}, {'price': '0.2', 'size': '65625'}, {'price': '0.21', 'size': '30006'}, {'price': '0.22', 'size': '227'}, {'price': '0.221', 'size': '800'}, {'price': '0.24', 'size': '6000'}, {'price': '0.25', 'size': '42.85'}, {'price': '0.251', 'size': '6.84'}, {'price': '0.31', 'size': '6'}, {'price': '0.35', 'size': '20'}, {'price': '0.4', 'size': '30468.75'}, {'price': '0.41', 'size': '6'}, {'price': '0.5', 'size': '20640'}, {'price': '0.51', 'size': '3000'}, {'price': '0.6', 'size': '15625'}, {'price': '0.61', 'size': '6000'}, {'price': '0.611', 'size': '2000'}, {'price': '0.664', 'size': '6'}, {'price': '0.7', 'size': '99.99'}, {'price': '0.71', 'size': '3555.43'}, {'price': '0.73', 'size': '14'}, {'price': '0.75', 'size': '100'}, {'price': '0.76', 'size': '100'}, {'price': '0.79', 'size': '89.85'}, {'price': '0.85', 'size': '45'}, {'price': '0.9', 'size': '66.3'}, {'price': '0.901', 'size': '845.64'}, {'price': '0.91', 'size': '1210.97'}, {'price': '0.914', 'size': '25'}, {'price': '0.92', 'size': '1210.97'}, {'price': '0.926', 'size': '100000'}, {'price': '0.93', 'size': '713.43'}, {'price': '0.94', 'size': '713.44'}, {'price': '0.951', 'size': '281.91'}, {'price': '0.958', 'size': '500'}, {'price': '0.959', 'size': '200'}, {'price': '0.961', 'size': '4632.75'}, {'price': '0.963', 'size': '1034.14'}, {'price': '0.964', 'size': '100'}, {'price': '0.965', 'size': '8863.46'}, {'price': '0.966', 'size': '77'}, {'price': '0.968', 'size': '222.5'}, {'price': '0.969', 'size': '1346.82'}], 'asks': [{'price': '0.999', 'size': '221403.54'}, {'price': '0.998', 'size': '27633.11'}, {'price': '0.997', 'size': '13044.58'}, {'price': '0.996', 'size': '7500'}, {'price': '0.995', 'size': '6586.74'}, {'price': '0.994', 'size': '833.3'}, {'price': '0.993', 'size': '714.2'}, {'price': '0.992', 'size': '625'}, {'price': '0.991', 'size': '675.49'}, {'price': '0.99', 'size': '1700'}, {'price': '0.989', 'size': '2238.3'}, {'price': '0.988', 'size': '833.3'}, {'price': '0.986', 'size': '80'}, {'price': '0.983', 'size': '3199.98'}, {'price': '0.982', 'size': '655'}, {'price': '0.981', 'size': '2577.95'}, {'price': '0.98', 'size': '368.16'}, {'price': '0.979', 'size': '51.5'}, {'price': '0.977', 'size': '70.5'}, {'price': '0.976', 'size': '22.9'}, {'price': '0.975', 'size': '20.1'}, {'price': '0.972', 'size': '10.46'}, {'price': '0.971', 'size': '213.85'}], 'min_order_size': '5', 'tick_size': '0.001', 'neg_risk': False, 'last_trade_price': '0.029'}
+yes_bid 0.029
+yes_ask 0.031
+no_bid 0.969
+no_ask 0.971
+strike 150.0
+expiry 20261231
+direction up
+event_type touch
+expiry_dt 2026-12-31 00:00:00+00:00
+T 0.3761987036723642
+iv 0.07330828953123085
+model_prob 1.0
+buy_yes_fee 0.00210273
+sell_yes_fee 0.00197113
+buy_no_fee 0.001971130000000002
+sell_no_fee 0.002102730000000002
+buy_yes_ev 0.96689727
+sell_yes_ev -0.97297113
+buy_no_ev -0.97297113
+sell_no_ev 0.9668972699999999
+buy_yes_kelly 0.5
+sell_yes_kelly -17.998738571016844
+buy_no_kelly -17.998738571016855
+sell_no_kelly 0.5
+best_ev 0.96689727
+best_action buy_yes_ev
