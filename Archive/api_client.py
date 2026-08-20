@@ -47,7 +47,7 @@ class TradingDeskAPI:
         return response.json()
 
     # # -----------------------------------------------------
-    # # Markets
+    # # Non authenticated functions
     # # -----------------------------------------------------
     def get_all_markets(self, DATA_DIR, count_limit=20, liquidity_num_min=10000, volume_num_min=5000):
 
@@ -103,6 +103,35 @@ class TradingDeskAPI:
             os.remove(f)
 
         return all_markets_df
+
+    # def get_markets(self, limit=10000, liquidity_num_min=10000, volume_num_min=5000):
+
+    #     url = "https://gamma-api.polymarket.com/markets"
+    #     params = {
+    #             "limit": limit,
+    #             "active": "true",
+    #             "closed": "false",
+    #             "order": "liquidity", # sorted by highest liquidity first
+    #             "ascending": "false",
+    #             "liquidity_num_min": liquidity_num_min,
+    #             "volume_num_min": volume_num_min,
+    #             "include_tag": "true",
+    #         }
+
+    #     r = requests.get(url, params=params, timeout=10)
+    #     r.raise_for_status()
+
+    #     return r.json()
+
+    # def get_orderbook(self, token_id):
+
+    #     url = "https://clob.polymarket.com/book"
+    #     params = {"token_id": token_id}
+
+    #     r = requests.get(url, params=params, timeout=10)
+    #     r.raise_for_status()
+
+    #     return r.json()
 
     # =====================================================
     # LIMIT ORDERS - TEST

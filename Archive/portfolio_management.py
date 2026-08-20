@@ -1,5 +1,6 @@
 import requests
 import os
+import json
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
@@ -557,6 +558,41 @@ class Portfolio():
         df.to_parquet(filename, engine="fastparquet", index=False)
 
         print('save_snapshots df saved at: ', filename)
+
+
+    def save_snapshots(self, df, df_name):
+
+        date = datetime.now().strftime("%Y%m%d")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        DATA_DIR = f"data/{date}"
+        os.makedirs(DATA_DIR, exist_ok=True)
+
+        filename = f"{DATA_DIR}/{df_name}_{timestamp}.parquet"
+
+        df = df.copy()
+
+        complex_cols = [
+            "events",
+            "tags",
+            "yes_book",
+            "no_book",
+            "feeSchedule",
+        ]
+
+        for col in complex_cols:
+            if col in df.columns:
+                df[col] = df[col].apply(
+                    lambda x: json.dumps(x) if x is not None else None
+                )
+
+        df.to_parquet(
+            filename,
+            engine="fastparquet",
+            index=False
+        )
+
+        print("save_snapshots df saved at:", filename)
 
     def save(self, df, df_name):
 

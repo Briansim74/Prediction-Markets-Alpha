@@ -32,3 +32,81 @@ ORDER SUBMITTED
 
 order resp:
 {'order_id': '019fff60-088b-7c83-9713-f9cece2ef518', 'clob_order_id': '0x8039083a81a0749075a21658567ad6e0e449ea2ac99edb17d0053452709e311a', 'status': 'submitted', 'clob_status': 'matched', 'error_message': None, 'replayed': False}
+
+======================================================================
+BUY SIGNAL
+======================================================================
+Market                    : Will Ethereum reach $4,500 by December 31, 2026?
+Outcome                   : NO
+Direction                 : up
+Event Type                : touch
+Best Action               : buy_no_ev
+Kelly Size x Fraction     : 0.08506495302275262
+Recommended Size          : 4.959176
+Current Ask               : 0.96
+P Yes                     : 0.01192045178252044
+P No                      : 0.9880795482174796
+Buy Yes EV                : -0.04140454821747957
+Sell No EV                : -0.04140454821747963
+Buy No EV                 : 0.025391548217479572
+Sell Yes EV               : 0.02539154821747956
+Unrealized Pnl            : 0.12592115652296748
+Cash                      : 95.21618
+Current Shares            : 0.0
+Fee Rate                  : 0.07
+ENTRY EV THRESHOLD        : 0.02
+MAX POSITION THRESHOLD    : 0.05
+======================================================================
+                         VARIABLES IN REQUEST                         
+tokenId                   : 4251240413067872674686064123803499349976238079777545616008767482027755117695
+orderPrice                : 0.96
+orderSize                 : 4.959176
+clientOrderId             : be29817f-3d8f-423e-b6e2-0a94f894d65c
+======================================================================
+
+LIMIT ORDER SUBMITTED
+
+
+{'order_id': '01a01909-73d4-7d70-b257-86624e8fc697', 'clob_order_id': '0x387e06d4de5bb3110d135297db63ce667c4a3ac0de7dd3ca8eb16cd7b5e89547', 'status': 'submitted', 'clob_status': 'matched', 'error_message': None, 'replayed': False}
+
+LIMIT ORDER RECORDED
+
+
+
+======================================================================
+BUY SIGNAL
+======================================================================
+Market                    : Will Ethereum reach $5,500 by December 31, 2026?
+Outcome                   : NO
+Direction                 : up
+Event Type                : touch
+Best Action               : buy_no_ev
+Kelly Size x Fraction     : 0.10735439045607363
+Recommended Size          : 4.913116
+Current Ask               : 0.969
+P Yes                     : 0.0040792795464433314
+P No                      : 0.9959207204535566
+Buy Yes EV                : -0.03008904045355667
+Sell No EV                : -0.030089040453556697
+Buy No EV                 : 0.024817990453556642
+Sell Yes EV               : 0.024817990453556666
+Unrealized Pnl            : 0.12193366598521638
+Cash                      : 95.21618
+Current Shares            : 0.0
+Fee Rate                  : 0.07
+ENTRY EV THRESHOLD        : 0.02
+MAX POSITION THRESHOLD    : 0.05
+======================================================================
+                         VARIABLES IN REQUEST                         
+tokenId                   : 447913121087537662187327157218300928168985707076581166939650812231975265268
+orderPrice                : 0.969
+orderSize                 : 4.913116
+clientOrderId             : f768eb76-58fc-4a96-b876-74fa06f9b443
+======================================================================
+
+LIMIT ORDER SUBMITTED
+
+
+{'order_id': '01a01909-c882-7ab3-99b0-15a8769185da', 'clob_order_id': '0xf7ff5b16da1bb114dc0b34d7e83324beb8b85502f0290898235ea18753209b32', 'status': 'submitted', 'clob_status': 'matched', 'error_message': None, 'replayed': False}
+
+LIMIT ORDER RECORDED

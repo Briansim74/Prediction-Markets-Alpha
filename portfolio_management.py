@@ -1,4 +1,5 @@
 import os
+import json
 import uuid
 import numpy as np
 import pandas as pd
@@ -45,14 +46,14 @@ class Portfolio():
 
             new_fills.append({
                 "fill_id": fill_id,
-                "order_id": trade.get("taker_order_id"),
+                "order_id": trade["taker_order_id"],
                 "condition_id": trade["market"],
                 "token_id": trade["asset_id"],
-                "outcome": trade.get("outcome"),
+                "outcome": trade["outcome"],
                 "side": trade["side"],
                 "price": float(trade["price"]),
                 "shares": float(trade["size"]),
-                "fee_rate_bps": float(trade.get("fee_rate_bps", 0)),
+                "fee_rate_bps": float(trade["fee_rate_bps"]),
                 "timestamp": pd.to_datetime(int(trade["match_time"]), unit="s", utc=True),
             })
 
@@ -60,11 +61,56 @@ class Portfolio():
         if not new_fills:
             return fills_df
 
+        def get_fee_rate(trade):
+            return float(api.fee_rate(trade["token_id"])["fee_rate"])
+
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            fee_rates = list(executor.map(get_fee_rate, new_fills))
+
+        new_fills = pd.DataFrame(new_fills)
+        new_fills["fee_rate"] = fee_rates
+
         # Append new rows
-        fills_df = pd.concat([fills_df, pd.DataFrame(new_fills)], ignore_index=True)
+        fills_df = pd.concat([fills_df, new_fills], ignore_index=True)
         fills_df["timestamp"] = fills_df["timestamp"] = (pd.to_datetime(fills_df["timestamp"], utc=True).astype("datetime64[ms, UTC]"))
 
         return fills_df
+
+
+    def sync_fills_test(self, api, orders_df_backtest, fills_df_backtest):
+    
+        new_fills = []
+
+        for _, order in orders_df_backtest.iterrows():
+            # print(trade)
+
+            order_id = order["order_id"]
+
+            if order_id in fills_df_backtest["order_id"].values:
+                continue
+
+            new_fills.append({
+                "fill_id": "-",
+                "order_id": order["order_id"],
+                "condition_id": order["market"],
+                "token_id": order["token_id"],
+                "outcome": order["outcome"],
+                "side": order["side"],
+                "price": float(order["price"]),
+                "shares": float(order["requested_size"]),
+                "fee_rate_bps": float(api.fee_rate(order["token_id"])["fee_rate"]) * 100.0,
+                "timestamp": pd.to_datetime(order["created_at"]),
+            })
+
+        # Nothing new
+        if not new_fills:
+            return fills_df_backtest
+
+        # Append new rows
+        fills_df_backtest = pd.concat([fills_df_backtest, pd.DataFrame(new_fills)], ignore_index=True)
+        fills_df_backtest["timestamp"] = fills_df_backtest["timestamp"] = (pd.to_datetime(fills_df_backtest["timestamp"], utc=True).astype("datetime64[ms, UTC]"))
+
+        return fills_df_backtest
 
 
     # Doesnt cancel filled orders, historical order ledger
@@ -105,6 +151,12 @@ class Portfolio():
 
         return orders_df
 
+
+    def fee(self, price, fee_rate):
+        #fee = C × feeRate × p × (1 - p)
+        #Where C = number of shares traded and p = price of the shares.
+        return fee_rate * price * (1 - price)
+    
 
     #FIFO matching
     def reconstruct_positions_fifo(self, fills_df):
@@ -156,16 +208,20 @@ class Portfolio():
                 side = trade["side"]
                 shares = float(trade["shares"])
                 price = float(trade["price"])
-                fee_rate_bps = float(trade["fee_rate_bps"])
-                fee_rate = fee_rate_bps / 10_000
 
-                # Fee for the entire fill.
-                fee = shares * price * fee_rate
+                # fee_rate_bps = float(trade["fee_rate_bps"])
+                # fee_rate = fee_rate_bps / 10_000
+
+                # # Fee for the entire fill.
+                # fee = shares * price * fee_rate
+                
+                fee_rate = float(trade["fee_rate"])
+                fee_per_share = self.fee(price, fee_rate)
 
                 if side == "BUY":
 
                     # Store this BUY as a FIFO lot.
-                    fee_per_share = fee / shares if shares > 0 else 0
+                    # fee_per_share = fee / shares if shares > 0 else 0
 
                     buy_lots.append({
                         "shares": shares,
@@ -176,7 +232,8 @@ class Portfolio():
                 elif side == "SELL":
 
                     remaining_to_sell = shares
-                    sell_fee_per_share = fee / shares if shares > 0 else 0
+                    # sell_fee_per_share = fee / shares if shares > 0 else 0
+                    sell_fee_per_share = fee_per_share
 
                     while remaining_to_sell > 0:
 
@@ -253,9 +310,9 @@ class Portfolio():
             })
 
         positions_df = pd.DataFrame(positions)
-        realized_df = pd.DataFrame(realized)
+        realized_pnl_df = pd.DataFrame(realized)
 
-        return positions_df, realized_df
+        return positions_df, realized_pnl_df
 
 
     def reconcile_positions(self, api, positions_df):
@@ -281,10 +338,10 @@ class Portfolio():
             else:
                 print("POSITIONS SYNCED")
 
-    def fee(self, price, fee_rate):
-        #fee = C × feeRate × p × (1 - p)
-        #Where C = number of shares traded and p = price of the shares.
-        return fee_rate * price * (1 - price)
+    # def fee(self, price, fee_rate):
+    #     #fee = C × feeRate × p × (1 - p)
+    #     #Where C = number of shares traded and p = price of the shares.
+    #     return fee_rate * price * (1 - price)
 
     def manage_open_orders(self, api, orders_df, markets_df, ENTRY_EV_THRESHOLD, EXIT_EV_THRESHOLD):
 
@@ -316,6 +373,7 @@ class Portfolio():
             p_no = 1 - p_yes
 
             if side == "BUY":
+                print("buy")
                 if is_yes:
                     buy_yes_cost = order["price"] + self.fee(order["price"], fee_rate)
                 
@@ -327,6 +385,8 @@ class Portfolio():
 
                     should_cancel = buy_yes_ev < ENTRY_EV_THRESHOLD
 
+                    print("buy_yes_ev:", buy_yes_ev, "ENTRY_EV_THRESHOLD:", ENTRY_EV_THRESHOLD)
+
                 else:
                     buy_no_cost =  order["price"] + self.fee( order["price"], fee_rate)
                     
@@ -337,8 +397,11 @@ class Portfolio():
 
                     should_cancel = buy_no_ev < ENTRY_EV_THRESHOLD
 
+                    print("buy_no_ev:", buy_no_ev, "ENTRY_EV_THRESHOLD:", ENTRY_EV_THRESHOLD)
+
 
             elif side == "SELL":
+                print("sell")
                 if is_yes:
                     hold_ev = p_yes
                     exit_ev = order["price"] - self.fee(order["price"], fee_rate)
@@ -349,9 +412,10 @@ class Portfolio():
 
                 should_cancel = (exit_ev - hold_ev) < EXIT_EV_THRESHOLD
 
-            else:
-                should_cancel = False
+                print("exit_ev - hold_ev:", exit_ev - hold_ev, "EXIT_EV_THRESHOLD", EXIT_EV_THRESHOLD)
 
+
+            print("should_cancel:", should_cancel)
 
             if should_cancel:
 
@@ -430,7 +494,7 @@ class Portfolio():
         return positions_df
 
     
-    def calculate_equity(self, api, positions_df, realized_df, equity_df):
+    def calculate_equity(self, api, positions_df, realized_pnl_df, equity_df):
         """
         Calculate the current account equity and P&L.
 
@@ -475,10 +539,10 @@ class Portfolio():
         # ---------------------------------------------------------
         # 3. Realized P&L
         # ---------------------------------------------------------
-        if realized_df.empty:
+        if realized_pnl_df.empty:
             realized_pnl = 0.0
         else:
-            realized_pnl = realized_df["realized_pnl"].sum()
+            realized_pnl = realized_pnl_df["realized_pnl"].sum()
 
         # ---------------------------------------------------------
         # 4. Total equity
@@ -649,7 +713,7 @@ class Portfolio():
                     normalized_size = api.normalize_size(pos["shares"])
                     
                     try:
-                        order = api.place_limit_order_test(
+                        order = api.place_limit_order(
                             token_id=pos["token_id"],
                             side="sell",
                             price=price,
@@ -689,6 +753,95 @@ class Portfolio():
                     print("\nSKIPPING LIMIT ORDER\n\n")
 
         return orders_df
+
+
+    # Inventory Management Step
+    def run_risk_management_test(self, api, positions_df_backtest, markets_df, orders_df_backtest, EXIT_EV_THRESHOLD):
+
+        for _, pos in positions_df_backtest.iterrows():
+
+            condition_id = pos["condition_id"]
+            market = markets_df.loc[markets_df["conditionId"] == condition_id].iloc[0]
+
+            print("pos:", pos)
+            print("market:", market)
+
+            fee_rate = market["feeSchedule"]["rate"]
+
+            p_yes = market["model_prob"]
+            p_no = 1 - p_yes
+
+            if pos["outcome"] == "Yes": # no shorting in polymarket
+                current_bid = market["yes_bid"]
+                hold_ev = p_yes
+                exit_ev = current_bid - self.fee(current_bid, fee_rate)
+
+            elif pos["outcome"] == "No":
+                current_bid = market["no_bid"]
+                hold_ev = p_no
+                exit_ev = current_bid - self.fee(current_bid, fee_rate)
+
+            if (exit_ev - hold_ev) > EXIT_EV_THRESHOLD:
+                best_action = "EXIT"
+
+            else:
+                best_action = "HOLD"
+
+            client_oid = str(uuid.uuid4())
+
+            self.format_signal_exit(best_action, market, pos, current_bid,
+                        client_oid, hold_ev, exit_ev, fee_rate, EXIT_EV_THRESHOLD)
+
+            if best_action == "EXIT":
+                confirm_order = True
+
+                if confirm_order == True:
+
+                    price_tick = float(api.tick_size(pos["token_id"])["tick_size"])
+                    price = api.round_to_tick(current_bid, price_tick)
+                    normalized_size = api.normalize_size(pos["shares"])
+                    
+                    try:
+                        order = api.place_limit_order_test(
+                            token_id=pos["token_id"],
+                            side="sell",
+                            price=price,
+                            size=normalized_size,
+                            order_type="GTC",
+                        )
+                
+                        print("\nLIMIT ORDER SUBMITTED\n\n")
+                        print(order)
+                
+                        order_row = {
+                            "order_id": order["clob_order_id"],
+                            "condition_id": condition_id,
+                            "token_id": pos["token_id"],
+                            "outcome": pos["outcome"],
+                            "side": "sell",
+                            "price": price,
+                            "requested_size": normalized_size,
+                            "order_type": "GTC",
+                            "status": "OPEN",
+                            "created_at": datetime.now(timezone.utc),
+                            "cancelled_at": None,
+                        }
+
+                        orders_df_backtest = pd.concat([orders_df_backtest, pd.DataFrame([order_row])], ignore_index=True)
+                        orders_df_backtest["created_at"] = pd.to_datetime(orders_df_backtest["created_at"], utc=True)
+                        orders_df_backtest["cancelled_at"] = pd.to_datetime(orders_df_backtest["cancelled_at"], utc=True)
+                
+                        print("\nLIMIT ORDER RECORDED\n\n")
+            
+                    except Exception as e:
+                        print("\nLIMIT ORDER ERROR\n\n")
+                        print(e)
+                        break
+
+                else:
+                    print("\nSKIPPING LIMIT ORDER\n\n")
+
+        return orders_df_backtest
 
 
     def format_signal_entry(self, trade, outcome, best_action, kelly, 
@@ -747,7 +900,7 @@ class Portfolio():
 
     # New Opportunities Step
     def run_new_opportunities(self, api, opportunities_df, orders_df, 
-                              ENTRY_EV_THRESHOLD=0.01, MAX_POSITION=0.05, FRACTION=0.1):
+                              ENTRY_EV_THRESHOLD=0.02, MAX_POSITION=0.05, FRACTION=0.1):
 
         cash = float(api.balance()["balance"])
             
@@ -793,10 +946,7 @@ class Portfolio():
                 print(f"Order too small after position cap, skipping, dollars: {dollars}")
                 continue
     
-            # min order amount
-            # dollars = max(1.0, dollars)
-            dollars = min(1.0, max(1.0, dollars))
-            print(f"min order cap, dollars: {dollars}")
+            print(f"dollars: {dollars}")
     
             size = dollars / current_ask
             normalized_size = api.normalize_size(size)
@@ -812,20 +962,11 @@ class Portfolio():
             
             if confirm_order == True:
     
-                # price_tick = api.get_tick_size(token_id)
                 price_tick = float(api.tick_size(token_id)["tick_size"])
                 price = api.round_to_tick(current_ask, price_tick)
     
                 try:
-                    order = api.place_limit_order_test(
-                        token_id=token_id,
-                        side="buy",
-                        price=price,
-                        size=normalized_size,
-                        order_type="GTC",
-                        client_order_id=client_oid
-                    )
-                    # order = api.place_limit_order(
+                    # order = api.place_limit_order_test(
                     #     token_id=token_id,
                     #     side="buy",
                     #     price=price,
@@ -833,6 +974,14 @@ class Portfolio():
                     #     order_type="GTC",
                     #     client_order_id=client_oid
                     # )
+                    order = api.place_limit_order(
+                        token_id=token_id,
+                        side="buy",
+                        price=price,
+                        size=normalized_size,
+                        order_type="GTC",
+                        client_order_id=client_oid
+                    )
             
                     print("\nLIMIT ORDER SUBMITTED\n\n")
                     print(order)
@@ -843,7 +992,7 @@ class Portfolio():
                         "token_id": token_id,
                         "outcome": outcome,
                         "side": "buy",
-                        "price": price,
+                        "price": float(price),
                         "requested_size": normalized_size,
                         "order_type": "GTC",
                         "status": "OPEN",
@@ -868,17 +1017,185 @@ class Portfolio():
         return orders_df
 
 
-    def save_snapshots(self, DATA_DIR, df, df_name):
+    # New Opportunities Step
+    def run_new_opportunities_test(self, api, opportunities_df, orders_df_backtest, 
+                                ENTRY_EV_THRESHOLD=0.02, MAX_POSITION=0.05, FRACTION=0.25):
+
+        cash = float(api.balance()["balance"])
+            
+        for _, trade in opportunities_df.iterrows():
     
+            if trade["best_ev"] < ENTRY_EV_THRESHOLD:
+                print(f"Current trade is less than required ev ({ENTRY_EV_THRESHOLD}), skipping")
+                continue
+    
+            # usually cannot short, this only happens when im closing positions
+            if trade["best_action"] == "buy_yes_ev" or trade["best_action"] == "sell_no_ev":
+                best_action = "buy_yes_ev"
+                ev = trade["buy_yes_ev"]
+                token_id = trade["yes_token"]
+                outcome = "YES"
+                kelly = trade["buy_yes_kelly"]
+                current_ask = trade["yes_ask"]
+    
+            elif trade["best_action"] == "buy_no_ev" or trade["best_action"] == "sell_yes_ev":
+                best_action = "buy_no_ev"
+                ev = trade["buy_no_ev"]
+                token_id = trade["no_token"]
+                outcome = "NO"
+                kelly = trade["buy_no_kelly"]
+                current_ask = trade["no_ask"]
+    
+            current_size = float(api.balance(asset_type="conditional", token_id=token_id)["balance"])
+            print("current balance size:", current_size)
+    
+            max_position_value = cash * MAX_POSITION
+            current_position_value = current_size * current_ask
+            remaining_capacity = max(0.0, max_position_value - current_position_value)
+    
+            if remaining_capacity == 0:
+                print(f"No more dollars to allocate for this trade position, skipping, remaining_capacity: {remaining_capacity}")
+                continue
+    
+            kelly_dollars = cash * FRACTION * kelly
+    
+            dollars = min(kelly_dollars, remaining_capacity)
+    
+            if dollars < 1.0:
+                print(f"Order too small after position cap, skipping, dollars: {dollars}")
+                continue
+    
+            print(f"dollars: {dollars}")
+    
+            size = dollars / current_ask
+            normalized_size = api.normalize_size(size)
+            
+            client_oid = str(uuid.uuid4())
+    
+            self.format_signal_entry(trade, outcome, best_action, kelly, 
+                                            normalized_size, current_ask, token_id, 
+                                            client_oid, ev, cash, current_size, 
+                                            ENTRY_EV_THRESHOLD, FRACTION, MAX_POSITION)
+    
+            confirm_order = (input("Place this order? Type YES to confirm: ") == "YES")
+            
+            if confirm_order == True:
+    
+                price_tick = float(api.tick_size(token_id)["tick_size"])
+                price = api.round_to_tick(current_ask, price_tick)
+    
+                try:
+                    order = api.place_limit_order_test(
+                        token_id=token_id,
+                        side="buy",
+                        price=price,
+                        size=normalized_size,
+                        order_type="GTC",
+                        client_order_id=client_oid
+                    )
+            
+                    print("\nLIMIT ORDER SUBMITTED\n\n")
+                    print(order)
+    
+                    order_row = {
+                        "order_id": order["clob_order_id"],
+                        "condition_id": trade["conditionId"],
+                        "token_id": token_id,
+                        "outcome": outcome,
+                        "side": "buy",
+                        "price": price,
+                        "requested_size": normalized_size,
+                        "order_type": "GTC",
+                        "status": "OPEN",
+                        "created_at": datetime.now(timezone.utc),
+                        "cancelled_at": None,
+                    }
+            
+                    orders_df_backtest = pd.concat([orders_df_backtest, pd.DataFrame([order_row])], ignore_index=True)
+                    orders_df_backtest["created_at"] = pd.to_datetime(orders_df_backtest["created_at"], utc=True)
+                    orders_df_backtest["cancelled_at"] = pd.to_datetime(orders_df_backtest["cancelled_at"], utc=True)
+            
+                    print("\nLIMIT ORDER RECORDED\n\n")
+    
+                except Exception as e:
+                    print("\nLIMIT ORDER ERROR\n\n")
+                    print(e)
+                    break
+    
+            else:
+                print("\nLIMIT SKIPPING ORDER\n\n")
+    
+        return orders_df_backtest
+
+
+    def save_snapshots(self, DATA_DIR, df, df_name):
+
         date = datetime.now().strftime("%Y%m%d")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         os.makedirs(f"{DATA_DIR}/{date}", exist_ok=True)
         filename = f"{DATA_DIR}/{date}/{df_name}_{timestamp}.parquet"
 
+        COLS = [
+            "id",
+            "question",
+            "slug",
+            "conditionId",
+
+            "currency",
+            "strike",
+            "expiry",
+            "direction",
+            "event_type",
+            "expiry_dt",
+            "T",
+
+            "yes_token",
+            "no_token",
+
+            "volume",
+            "liquidity",
+            "volume24hr",
+            "volume1wk",
+            "volume1mo",
+
+            "lastTradePrice",
+            "bestBid",
+            "bestAsk",
+            "spread",
+
+            "yes_bid",
+            "yes_ask",
+            "no_bid",
+            "no_ask",
+
+            "iv",
+            "model_prob",
+
+            "buy_yes_fee",
+            "sell_yes_fee",
+            "buy_no_fee",
+            "sell_no_fee",
+
+            "buy_yes_ev",
+            "sell_yes_ev",
+            "buy_no_ev",
+            "sell_no_ev",
+
+            "buy_yes_kelly",
+            "sell_yes_kelly",
+            "buy_no_kelly",
+            "sell_no_kelly",
+
+            "best_ev",
+            "best_action",
+        ]
+
+        df = df[COLS].copy()
+
         df.to_parquet(filename, engine="fastparquet", index=False)
 
-        print('save_snapshots df saved at: ', filename)
+        print("save_snapshots df saved at:", filename)
 
 
     def save(self, DATA_DIR, df, df_name):

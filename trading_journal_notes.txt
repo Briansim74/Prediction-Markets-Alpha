@@ -138,3 +138,10 @@ buy_no_kelly -17.998738571016855
 sell_no_kelly 0.5
 best_ev 0.96689727
 best_action buy_yes_ev
+
+
+
+
+shifted from monte carlo to analytical barrier equations, derived from first passage time probability, coco bonds
+
+check for no arbitrage conditions

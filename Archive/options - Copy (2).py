@@ -26,7 +26,6 @@ class OptionSurface:
                 "params": params
             }
 
-
     def get_weighted_spot(self, currency, exchanges):
 
         spots = [ex.data[currency]["spot"] for ex in exchanges if currency in ex.data]
@@ -35,7 +34,6 @@ class OptionSurface:
         weighted_spot = np.average(spots, weights=weights)
 
         return weighted_spot
-
 
     def get_curve_df(self, currency, exchanges):
             
@@ -49,7 +47,6 @@ class OptionSurface:
 
         return curve_df
 
-
     def get_surface(self, currency, exchanges):
     
         dfs = [ex.data[currency]["df"] for ex in exchanges if currency in ex.data]
@@ -60,7 +57,6 @@ class OptionSurface:
             lambda x: np.average(x.total_variance, weights=x.open_interest_notional)).reset_index(name="total_variance")
         
         return surface_df
-
 
     def build_variance_surface(self, weighted_spot, surface_df):
 
@@ -101,7 +97,6 @@ class OptionSurface:
 
         return f_variance, params
 
-
     def get_iv_from_curve(self, exchange, currency, required_strike):
 
         curve_df = exchange.data[currency]["curve_df"]
@@ -117,7 +112,6 @@ class OptionSurface:
         print(f"{currency} {required_strike} strike iv: {iv}")
 
         return iv
-
 
     def get_iv_from_surface(self, exchange, currency, required_strike, T):
 
@@ -144,7 +138,6 @@ class OptionSurface:
 
         return float(iv)
 
-
     def plot_curve(self, exchange, currency, exchange_name, target_expiry_str):
     
         curve_df = exchange.data[currency]["curve_df"]
@@ -160,7 +153,6 @@ class OptionSurface:
         plt.grid(True)
 
         plt.show()
-
 
     def plot_surface(self, exchange, currency):
 
@@ -234,18 +226,16 @@ class OptionSurface:
 
         plt.show()
 
-
     def prob_finish(self, spot, required_strike, iv, T, r=0):
 
         d2 = (np.log(spot / required_strike) + (r - 0.5 * iv ** 2) * T) / (iv * np.sqrt(T))
 
         p_finish_above = norm.cdf(d2)
-        p_finish_below = norm.cdf(-d2)
+        p_finish_below = 1 - p_finish_above
 
         print("p_finish_above:", p_finish_above, "p_finish_below:", p_finish_below)
 
         return p_finish_above, p_finish_below
-
 
     def prob_touch_above(self, spot, required_strike, iv, T, r=0, q=0):
 
@@ -259,7 +249,6 @@ class OptionSurface:
 
         return p_touch_above
 
-
     def prob_touch_below(self, spot, required_strike, iv, T, r=0, q=0):
 
         #coco prob exit P(min St​ ≤ L)
@@ -272,9 +261,27 @@ class OptionSurface:
 
         return p_touch_below
 
+    def prob_touch(self, spot, required_strike, iv, T, r=0, paths=100000, time_steps=365):
+    
+        # dS = rSdt + σSdW
+        dt = T / time_steps
+        Z = np.random.normal(0, 1, size=(paths, time_steps)) # vectorization
+
+        daily_return = ((r - 0.5 * iv ** 2) * dt + iv * np.sqrt(dt) * Z)
+
+        prices = spot * np.exp(np.cumsum(daily_return, axis=1))
+
+        hit_above = prices.max(axis=1) >= required_strike
+        hit_below = prices.min(axis=1) <= required_strike
+
+        p_touch_above = hit_above.mean()
+        p_touch_below = hit_below.mean()
+
+        print("p_touch_above:", p_touch_above, "p_touch_below:", p_touch_below)
+
+        return p_touch_above, p_touch_below
 
 class Deribit:
-
     def __init__(self, currencies, target_expiry):
          self.data = {}
 
@@ -290,7 +297,6 @@ class Deribit:
                 "curve_df": curve_df
             }
 
-
     def get_spot(self, currency):
         url = "https://www.deribit.com/api/v2/public/ticker"
         params = {"instrument_name": f"{currency}_USDT"}
@@ -303,7 +309,6 @@ class Deribit:
         print("spot:", spot, "volume24h:", volume)
 
         return spot, volume
-
 
     def get_df(self, currency):
         
@@ -342,7 +347,6 @@ class Deribit:
 
         return df
 
-
     def get_curve_df(self, df, target_expiry):
 
         curve_df = df[
@@ -356,7 +360,6 @@ class Deribit:
 
 
 class OKX:
-
     def __init__(self, currencies, target_expiry):
         self.data = {}
          
@@ -372,7 +375,6 @@ class OKX:
                 "curve_df": curve_df
             }
 
-
     def get_spot(self, currency):
         url = "https://www.okx.com/api/v5/market/ticker"
         params = {"instId": f"{currency}-USDT"}
@@ -384,7 +386,6 @@ class OKX:
         print("spot:", spot, "volume24h:", volume)
 
         return spot, volume
-
 
     def get_df(self, currency):
 
@@ -431,7 +432,6 @@ class OKX:
 
         return df
 
-
     def get_curve_df(self, df, target_expiry):
 
         curve_df = df[
@@ -445,7 +445,6 @@ class OKX:
 
 
 class Bybit:
-
     def __init__(self, currencies, target_expiry):
 
         self.data = {}
@@ -462,7 +461,6 @@ class Bybit:
                 "curve_df": curve_df
             }
 
-
     def get_spot(self, currency):
         url = "https://api.bybit.com/v5/market/tickers"
         params = {
@@ -477,7 +475,6 @@ class Bybit:
         print("spot:", spot, "volume24h:", volume)
 
         return spot, volume
-
 
     def get_df(self, currency):
         contract_size = 1.0
@@ -509,7 +506,6 @@ class Bybit:
         df = df.sort_values(["expiry", "strike"])
 
         return df
-
 
     def get_curve_df(self, df, target_expiry):
 

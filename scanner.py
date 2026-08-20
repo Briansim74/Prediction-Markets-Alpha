@@ -12,6 +12,7 @@ class MarketScanner:
     def __init__(self, api):
         self.api = api
 
+
     def scan_market(self, markets_df, s, crypto_tag_ids):
 
         markets_df = markets_df[
@@ -46,7 +47,20 @@ class MarketScanner:
         markets_df["currency"] = markets_df.apply(
             lambda row: self.extract_currency(row, CURRENCIES), axis=1)
 
-        markets_df = markets_df.dropna(subset=["currency"])
+        markets_df["strike"] = markets_df["question"].apply(self.extract_strike)
+        markets_df["expiry"] = markets_df.apply(
+            lambda row: self.extract_expiry(row["question"], row["slug"]), axis=1)
+
+        markets_df[["direction", "event_type"]] = markets_df["question"].apply(
+            lambda x: pd.Series(self.parse_crypto_market_type(x))
+        )
+
+        markets_df["expiry_dt"] = pd.to_datetime(markets_df["expiry"], format="%Y%m%d", utc=True)
+        markets_df["T"] = (markets_df["expiry_dt"] - datetime.now(
+            timezone.utc)).dt.total_seconds() / (365.25 * 24 * 3600)
+
+        markets_df = markets_df[markets_df["T"] > 0]
+        markets_df = markets_df.dropna(subset=["currency", "strike", "expiry", "direction", "event_type"])
 
         markets_df["tokens"] = markets_df["clobTokenIds"].apply(json.loads)
         markets_df["yes_token"] = markets_df["tokens"].apply(lambda x: x[0])
@@ -64,19 +78,6 @@ class MarketScanner:
         with ThreadPoolExecutor(max_workers=30) as executor:
             markets_df[book_cols] = list(executor.map(
                 self.get_books, (row for _, row in markets_df.iterrows())))
-
-        markets_df["strike"] = markets_df.question.apply(self.extract_strike)
-        markets_df["expiry"] = markets_df.apply(
-            lambda row: self.extract_expiry(row["question"], row["slug"]), axis=1)
-
-        markets_df[["direction", "event_type"]] = markets_df["question"].apply(
-            lambda x: pd.Series(self.parse_crypto_market_type(x))
-        )
-
-        markets_df["expiry_dt"] = pd.to_datetime(markets_df["expiry"], format="%Y%m%d", utc=True)
-        markets_df["T"] = (markets_df["expiry_dt"] - datetime.now(
-            timezone.utc)).dt.total_seconds() / (365.25 * 24 * 3600)
-        markets_df = markets_df[markets_df["T"] > 0]
 
         markets_df[["iv", "model_prob", "buy_yes_fee", "sell_yes_fee", "buy_no_fee", "sell_no_fee",
             "buy_yes_ev", "sell_yes_ev", "buy_no_ev", "sell_no_ev",
@@ -97,17 +98,27 @@ class MarketScanner:
 
         opportunities_df = markets_df[markets_df["best_ev"] > 0].sort_values("best_ev", ascending=False)
 
+        # new sorting order
+        cols = ["id", "question", "endDate", "yes_ask", "no_ask", "model_prob"]
+
+        markets_df = markets_df[cols + [c for c in markets_df.columns if c not in cols]]
+        opportunities_df = opportunities_df[cols + [c for c in opportunities_df.columns if c not in cols]]
+
         self.markets_df = markets_df
         self.opportunities_df = opportunities_df
 
         return self.markets_df, self.opportunities_df
 
-    def is_market_keyword(self, row, KEYWORDS):
-        text = (str(row["question"]) + " " + str(row.get("description", ""))).lower()
 
-        return any(k in text for k in KEYWORDS)
+    # def is_market_keyword(self, row, KEYWORDS):
+
+    #     text = (str(row["question"]) + " " + str(row.get("description", ""))).lower()
+
+    #     return any(k in text for k in KEYWORDS)
+
 
     def extract_currency(self, row, CURRENCIES):
+
         text = f'{row.get("question", "")} {row.get("description", "")}'.lower()
 
         for keyword, currency in CURRENCIES.items():
@@ -116,42 +127,29 @@ class MarketScanner:
 
         return None
 
-    def get_books(self, row):
-
-        yes_book = self.api.orderbook(row["yes_token"])
-        no_book = self.api.orderbook(row["no_token"])
-
-        yes_bids = yes_book.get("bids", [])
-        yes_asks = yes_book.get("asks", [])
-
-        no_bids = no_book.get("bids", [])
-        no_asks = no_book.get("asks", [])
-
-        return pd.Series({
-            "yes_book": yes_book,
-            "no_book": no_book,
-
-            # Highest price someone is bidding
-            "yes_bid": (max(float(x["price"]) for x in yes_bids) if yes_bids else None),
-
-            # Lowest price someone is asking
-            "yes_ask": (min(float(x["price"]) for x in yes_asks) if yes_asks else None),
-
-            # Highest price someone is bidding
-            "no_bid": (max(float(x["price"]) for x in no_bids) if no_bids else None),
-
-            # Lowest price someone is asking
-            "no_ask": (min(float(x["price"]) for x in no_asks) if no_asks else None)
-        })
 
     def extract_strike(self, question):
+    
+        match = re.search(
+            r'\$([\d,]+(?:\.\d+)?)([kmb])?\b',
+            question,
+            re.IGNORECASE
+        )
 
-        match = re.search(r'\$([\d,]+)', question)
+        if not match:
+            return None
 
-        if match:
-            return float(match.group(1).replace(",", ""))
+        value = float(match.group(1).replace(",", ""))
+        suffix = (match.group(2) or "").lower()
 
-        return None
+        multiplier = {
+            "k": 1e3,
+            "m": 1e6,
+            "b": 1e9,
+        }
+
+        return value * multiplier.get(suffix, 1)
+
 
     def extract_expiry(self, question, slug=None):
         # Try full date in question
@@ -253,6 +251,36 @@ class MarketScanner:
             "direction": direction,
             "event_type": event_type
         }
+    
+
+    def get_books(self, row):
+
+        yes_book = self.api.orderbook(row["yes_token"])
+        no_book = self.api.orderbook(row["no_token"])
+
+        yes_bids = yes_book.get("bids", [])
+        yes_asks = yes_book.get("asks", [])
+
+        no_bids = no_book.get("bids", [])
+        no_asks = no_book.get("asks", [])
+
+        return pd.Series({
+            "yes_book": yes_book,
+            "no_book": no_book,
+
+            # Highest price someone is bidding
+            "yes_bid": (max(float(x["price"]) for x in yes_bids) if yes_bids else None),
+
+            # Lowest price someone is asking
+            "yes_ask": (min(float(x["price"]) for x in yes_asks) if yes_asks else None),
+
+            # Highest price someone is bidding
+            "no_bid": (max(float(x["price"]) for x in no_bids) if no_bids else None),
+
+            # Lowest price someone is asking
+            "no_ask": (min(float(x["price"]) for x in no_asks) if no_asks else None)
+        })
+
 
     def calculate_ev(
             self,
@@ -279,11 +307,6 @@ class MarketScanner:
 
         def is_valid(price):
             return pd.notna(price)
-
-        # def fee(price):
-        #     #fee = C × feeRate × p × (1 - p)
-        #     #Where C = number of shares traded and p = price of the shares.
-        #     return fee_rate * price * (1 - price)
 
         def fee(price, fee_rate):
             #fee = C × feeRate × p × (1 - p)
@@ -329,6 +352,7 @@ class MarketScanner:
             sell_yes_kelly = kelly_fraction * (sell_yes_ev / profit_if_no)
 
         else:
+            print("price not valid")
             buy_yes_ev = np.nan
             sell_yes_ev = np.nan
             buy_yes_kelly = np.nan
@@ -360,6 +384,7 @@ class MarketScanner:
             sell_no_kelly = kelly_fraction * (sell_no_ev / profit_if_yes)
 
         else:
+            print("price not valid")
             buy_no_ev = np.nan
             sell_no_ev = np.nan
             buy_no_kelly = np.nan
@@ -373,6 +398,7 @@ class MarketScanner:
         print("sell_yes_kelly:", sell_yes_kelly)
         print("buy_no_kelly:", buy_no_kelly)
         print("sell_no_kelly:", sell_no_kelly)
+        print("")
 
         return {
             "buy_yes_fee": fee(best_ask_yes, fee_rate),
@@ -389,41 +415,39 @@ class MarketScanner:
             "sell_no_kelly": sell_no_kelly,
         }
 
+
     def calculate_market_ev(self, row, s, confidence=0.7):
 
         currency = row["currency"]
         required_strike = row["strike"]
-
         T = row["T"]
         fee_rate = row["feeSchedule"]["rate"]
 
         iv = s.get_iv_from_surface(exchange=s, currency=currency, required_strike=required_strike, T=T)
-        print('iv', iv)
+
+        print("question:", row["question"])
+        print("event type:", row["event_type"])
+        print("direction:", row["direction"])
+        print("currency:", currency)
+        print("required strike:", required_strike)
+        print('iv:', iv)
 
         if iv is None:
             return None
 
-        if row["event_type"] == "touch":
-            p_touch_above, p_touch_below = s.prob_touch(
-                        spot=s.data[currency]["weighted_spot"],
-                        required_strike=required_strike,
-                        iv=iv,
-                        T=T,
-                        r=0)
+        if row["event_type"] == "touch":   
             
             if row["direction"] == "up":
-                model_prob = p_touch_above
+                model_prob = s.prob_touch_above(spot=s.data[currency]["weighted_spot"],
+                    required_strike=required_strike, iv=iv, T=T, r=0, q=0)
 
             elif row["direction"] == "down":
-                model_prob = p_touch_below
+                model_prob = s.prob_touch_below(spot=s.data[currency]["weighted_spot"],
+                    required_strike=required_strike, iv=iv, T=T, r=0, q=0)
 
         if row["event_type"] == "expiry":
-            p_finish_above, p_finish_below = s.prob_finish(
-                        spot=s.data[currency]["weighted_spot"], 
-                        required_strike=required_strike, 
-                        iv=iv,
-                        T=T,
-                        r=0)
+            p_finish_above, p_finish_below = s.prob_finish(spot=s.data[currency]["weighted_spot"], 
+                    required_strike=required_strike, iv=iv, T=T, r=0)
 
             if row["direction"] == "up":
                 model_prob = p_finish_above
@@ -433,9 +457,6 @@ class MarketScanner:
 
         market_prob = (row["yes_bid"] + row["yes_ask"]) / 2
         model_prob_adjusted = (confidence * model_prob + (1-confidence) * market_prob)
-
-        print("")
-        print(currency)
 
         ev = self.calculate_ev(
             model_prob=model_prob,
