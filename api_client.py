@@ -121,7 +121,7 @@ class TradingDeskAPI:
         if client_order_id is None:
             client_order_id = str(uuid.uuid4())
 
-        print("{ TEST } - PLACED LIMIT ORDER")
+        print("\n{ TEST } - PLACED LIMIT ORDER")
 
         return {
             "clob_order_id": str(uuid.uuid4()),
@@ -426,29 +426,29 @@ class TradingDeskAPI:
     # 17. Market order
     # -----------------------------------------------------
 
-    # def market_order(
-    #     self,
-    #     token_id,
-    #     side,
-    #     amount,
-    #     order_type="FOK",
-    #     client_order_id=None,
-    # ):
-    #     data = {
-    #         "token_id": token_id,
-    #         "side": side,
-    #         "amount": str(amount),
-    #         "order_type": order_type,
-    #     }
+    def market_order(
+        self,
+        token_id,
+        side,
+        amount,
+        order_type="FOK",
+        client_order_id=None,
+    ):
+        data = {
+            "token_id": token_id,
+            "side": side,
+            "amount": str(amount),
+            "order_type": order_type,
+        }
 
-    #     if client_order_id:
-    #         data["client_order_id"] = client_order_id
+        if client_order_id:
+            data["client_order_id"] = client_order_id
 
-    #     return self.request(
-    #         "POST",
-    #         "/v1/orders/market",
-    #         json=data,
-    #     )
+        return self.request(
+            "POST",
+            "/v1/orders/market",
+            json=data,
+        )
 
     # =====================================================
     # BULK CANCELS

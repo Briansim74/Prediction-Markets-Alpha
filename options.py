@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timezone
 from scipy.interpolate import RBFInterpolator
 from scipy.interpolate import PchipInterpolator
+from concurrent.futures import ThreadPoolExecutor
 
 class OptionSurface:
 
@@ -14,13 +15,13 @@ class OptionSurface:
 
         for currency in currencies:
             weighted_spot = self.get_weighted_spot(currency, exchanges)
-            curve_df = self.get_curve_df(currency, exchanges)
+            # curve_df = self.get_curve_df(currency, exchanges)
             surface_df = self.get_surface(currency, exchanges)
             f_variance, params = self.build_variance_surface(weighted_spot, surface_df)
 
             self.data[currency] = {
                 "weighted_spot": weighted_spot,
-                "curve_df": curve_df,
+                # "curve_df": curve_df,
                 "surface_df": surface_df,
                 "f_variance": f_variance,
                 "params": params
@@ -37,17 +38,17 @@ class OptionSurface:
         return weighted_spot
 
 
-    def get_curve_df(self, currency, exchanges):
+    # def get_curve_df(self, currency, exchanges):
             
-        dfs = [ex.data[currency]["curve_df"] for ex in exchanges if currency in ex.data]
+    #     dfs = [ex.data[currency]["curve_df"] for ex in exchanges if currency in ex.data]
 
-        curve_df = pd.concat(dfs, ignore_index=True)
+    #     curve_df = pd.concat(dfs, ignore_index=True)
 
-        curve_df = (curve_df.groupby("strike").apply(
-            lambda x: np.average(x.mark_iv, weights=x.open_interest_notional)).reset_index(name="mark_iv")
-        )
+    #     curve_df = (curve_df.groupby("strike").apply(
+    #         lambda x: np.average(x.mark_iv, weights=x.open_interest_notional)).reset_index(name="mark_iv")
+    #     )
 
-        return curve_df
+    #     return curve_df
 
 
     def get_surface(self, currency, exchanges):
@@ -102,21 +103,21 @@ class OptionSurface:
         return f_variance, params
 
 
-    def get_iv_from_curve(self, exchange, currency, required_strike):
+    # def get_iv_from_curve(self, exchange, currency, required_strike):
 
-        curve_df = exchange.data[currency]["curve_df"]
+    #     curve_df = exchange.data[currency]["curve_df"]
 
-        # Question: Will BTC hit 100000 by 31DEC26?
+    #     # Question: Will BTC hit 100000 by 31DEC26?
 
-        # It prevents wild overshoots and spurious oscillations found in standard cubic splines, 
-        # making it ideal for monotonic data, bounded physical measurements, and financial curves
-        f = PchipInterpolator(curve_df.strike, curve_df.mark_iv)
+    #     # It prevents wild overshoots and spurious oscillations found in standard cubic splines, 
+    #     # making it ideal for monotonic data, bounded physical measurements, and financial curves
+    #     f = PchipInterpolator(curve_df.strike, curve_df.mark_iv)
 
-        iv = float(f(required_strike))
+    #     iv = float(f(required_strike))
 
-        print(f"{currency} {required_strike} strike iv: {iv}")
+    #     print(f"{currency} {required_strike} strike iv: {iv}")
 
-        return iv
+    #     return iv
 
 
     def get_iv_from_surface(self, exchange, currency, required_strike, T):
@@ -145,21 +146,21 @@ class OptionSurface:
         return float(iv)
 
 
-    def plot_curve(self, exchange, currency, exchange_name, target_expiry_str):
+    # def plot_curve(self, exchange, currency, exchange_name, target_expiry_str):
     
-        curve_df = exchange.data[currency]["curve_df"]
+    #     curve_df = exchange.data[currency]["curve_df"]
     
-        plt.plot(curve_df.strike,
-                curve_df.mark_iv * 100,   # convert decimal IV to %
-                marker="o"
-            )
+    #     plt.plot(curve_df.strike,
+    #             curve_df.mark_iv * 100,   # convert decimal IV to %
+    #             marker="o"
+    #         )
         
-        plt.xlabel("Strike")
-        plt.ylabel("Implied Volatility (%)")
-        plt.title(f"{exchange_name} {currency} {target_expiry_str} IV Smile")
-        plt.grid(True)
+    #     plt.xlabel("Strike")
+    #     plt.ylabel("Implied Volatility (%)")
+    #     plt.title(f"{exchange_name} {currency} {target_expiry_str} IV Smile")
+    #     plt.grid(True)
 
-        plt.show()
+    #     plt.show()
 
 
     def plot_surface(self, exchange, currency):
@@ -273,21 +274,103 @@ class OptionSurface:
         return p_touch_below
 
 
+# class Deribit:
+
+#     def __init__(self, currencies, target_expiry):
+#          self.data = {}
+
+#          for currency in currencies:
+#             spot, volume = self.get_spot(currency)
+#             df = self.get_df(currency)
+#             curve_df = self.get_curve_df(df, target_expiry)
+
+#             self.data[currency] = {
+#                 "spot": spot,
+#                 "volume": volume,
+#                 "df": df,
+#                 "curve_df": curve_df
+#             }
+
+
+#     def get_spot(self, currency):
+#         url = "https://www.deribit.com/api/v2/public/ticker"
+#         params = {"instrument_name": f"{currency}_USDT"}
+
+#         data = requests.get(url, params=params).json()["result"]
+        
+#         spot = float(data["last_price"])
+#         volume = float(data["stats"]["volume"])
+
+#         print("spot:", spot, "volume24h:", volume)
+
+#         return spot, volume
+
+
+#     def get_df(self, currency):
+        
+#         url = "https://www.deribit.com/api/v2/public/get_instruments"
+#         params = {
+#             "currency": f"{currency}",
+#             "kind": "option"
+#         }
+
+#         instruments = requests.get(url=url, params=params).json()["result"]
+#         instruments_df = pd.DataFrame(instruments)
+
+#         url = "https://www.deribit.com/api/v2/public/get_book_summary_by_currency"
+#         params = {
+#             "currency": f"{currency}",
+#             "kind": "option"
+#         }
+
+#         quotes = requests.get(url=url, params=params).json()["result"]
+#         quotes_df = pd.DataFrame(quotes)
+
+#         df = instruments_df.merge(quotes_df, on="instrument_name", how="left")
+#         df["open_interest_notional"] = df["open_interest"] * df["contract_size"]
+#         df["mark_iv"] = df["mark_iv"].astype(float) / 100
+
+#         parts = df["instrument_name"].str.split("-")
+
+#         df["expiry"] = pd.to_datetime(parts.str[1], format="%d%b%y").dt.strftime("%Y%m%d")
+#         df["expiry_dt"] = pd.to_datetime(parts.str[1], format="%d%b%y", utc=True)
+#         df["T"] = (df["expiry_dt"] - datetime.now(timezone.utc)).dt.total_seconds() / (365.25 * 24 * 3600)
+#         df["total_variance"] = df["mark_iv"] ** 2 * df["T"]
+
+#         df = df[df["T"] > 0] # remove expired options
+#         df = df[df["open_interest_notional"] >= 10]
+#         df = df.sort_values(["expiry", "strike"])
+
+#         return df
+
+
+#     def get_curve_df(self, df, target_expiry):
+
+#         curve_df = df[
+#             (df["expiry"] == target_expiry) &
+#             (df["option_type"] == "call")
+#         ]
+
+#         curve_df = curve_df.sort_values("strike")
+
+#         return curve_df
+
+
 class Deribit:
 
-    def __init__(self, currencies, target_expiry):
+    def __init__(self, currencies):
          self.data = {}
 
          for currency in currencies:
             spot, volume = self.get_spot(currency)
             df = self.get_df(currency)
-            curve_df = self.get_curve_df(df, target_expiry)
+            # curve_df = self.get_curve_df(df, target_expiry)
 
             self.data[currency] = {
                 "spot": spot,
                 "volume": volume,
                 "df": df,
-                "curve_df": curve_df
+                # "curve_df": curve_df
             }
 
 
@@ -299,30 +382,43 @@ class Deribit:
         
         spot = float(data["last_price"])
         volume = float(data["stats"]["volume"])
-
-        print("spot:", spot, "volume24h:", volume)
+        print(f"currency: {currency}, spot: {spot}, volume24h: {volume}")
 
         return spot, volume
 
 
     def get_df(self, currency):
-        
-        url = "https://www.deribit.com/api/v2/public/get_instruments"
-        params = {
-            "currency": f"{currency}",
-            "kind": "option"
-        }
 
-        instruments = requests.get(url=url, params=params).json()["result"]
+        def get_instruments(currency):
+            url = "https://www.deribit.com/api/v2/public/get_instruments"
+
+            params = {
+                "currency": currency,
+                "kind": "option"
+            }
+
+            return requests.get(url, params=params).json()["result"]
+
+
+        def get_quotes(currency):
+            url = "https://www.deribit.com/api/v2/public/get_book_summary_by_currency"
+
+            params = {
+                "currency": currency,
+                "kind": "option"
+            }
+
+            return requests.get(url, params=params).json()["result"]
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+
+            instruments_future = executor.submit(get_instruments, currency)
+            quotes_future = executor.submit(get_quotes, currency)
+
+            instruments = instruments_future.result()
+            quotes = quotes_future.result()
+
         instruments_df = pd.DataFrame(instruments)
-
-        url = "https://www.deribit.com/api/v2/public/get_book_summary_by_currency"
-        params = {
-            "currency": f"{currency}",
-            "kind": "option"
-        }
-
-        quotes = requests.get(url=url, params=params).json()["result"]
         quotes_df = pd.DataFrame(quotes)
 
         df = instruments_df.merge(quotes_df, on="instrument_name", how="left")
@@ -343,33 +439,122 @@ class Deribit:
         return df
 
 
-    def get_curve_df(self, df, target_expiry):
+    # def get_curve_df(self, df, target_expiry):
 
-        curve_df = df[
-            (df["expiry"] == target_expiry) &
-            (df["option_type"] == "call")
-        ]
+    #     curve_df = df[
+    #         (df["expiry"] == target_expiry) &
+    #         (df["option_type"] == "call")
+    #     ]
 
-        curve_df = curve_df.sort_values("strike")
+    #     curve_df = curve_df.sort_values("strike")
 
-        return curve_df
+    #     return curve_df
+
+
+# class OKX:
+
+#     def __init__(self, currencies, target_expiry):
+#         self.data = {}
+         
+#         for currency in currencies:
+#             spot, volume = self.get_spot(currency)
+#             df = self.get_df(currency)
+#             curve_df = self.get_curve_df(df, target_expiry)
+
+#             self.data[currency] = {
+#                 "spot": spot,
+#                 "volume": volume,
+#                 "df": df,
+#                 "curve_df": curve_df
+#             }
+
+
+#     def get_spot(self, currency):
+#         url = "https://www.okx.com/api/v5/market/ticker"
+#         params = {"instId": f"{currency}-USDT"}
+
+#         data = requests.get(url=url, params=params).json()["data"][0]
+
+#         spot = float(data["last"])
+#         volume = float(data["vol24h"])
+#         print("spot:", spot, "volume24h:", volume)
+
+#         return spot, volume
+
+
+#     def get_df(self, currency):
+
+#         url = f"https://www.okx.com/api/v5/public/instruments?instType=OPTION&uly={currency}-USD"
+#         data = requests.get(url).json()
+#         contract_size = float(data["data"][0]["ctVal"])
+        
+#         url = "https://www.okx.com/api/v5/public/open-interest"
+#         params = {
+#             "instType": "OPTION",
+#             "uly": f"{currency}-USD"
+#         }
+
+#         oi = requests.get(url=url, params=params).json()["data"]
+#         oi_df = pd.DataFrame(oi)
+#         oi_df = oi_df.rename(columns={"oi": "open_interest"})
+#         oi_df["open_interest"] = oi_df["open_interest"].astype(float)
+#         oi_df["open_interest_notional"] = oi_df["open_interest"] * contract_size
+
+#         url = "https://www.okx.com/api/v5/public/opt-summary"
+#         params = {"uly": f"{currency}-USD"}
+
+#         summary = requests.get(url=url, params=params).json()["data"]
+#         summary_df = pd.DataFrame(summary)
+#         summary_df = summary_df.rename(columns={"markVol": "mark_iv"})
+#         summary_df["mark_iv"] = summary_df["mark_iv"].astype(float)
+
+#         parts = summary_df["instId"].str.split("-")
+
+#         summary_df["ccy"] = parts.str[1]
+#         summary_df["strike"] = parts.str[3].astype(float)
+#         summary_df["option_type"] = parts.str[4].map({"C": "call", "P": "put"})
+#         summary_df["expiry"] = pd.to_datetime(parts.str[2], format="%y%m%d").dt.strftime("%Y%m%d")
+#         summary_df["expiry_dt"] = pd.to_datetime(parts.str[2], format="%y%m%d", utc=True)
+#         summary_df["T"] = (summary_df["expiry_dt"] - datetime.now(timezone.utc)).dt.total_seconds() / (365.25 * 24 * 3600)
+#         summary_df["total_variance"] = summary_df["mark_iv"] ** 2 * summary_df["T"]
+
+#         df = summary_df.merge(oi_df, on="instId", how="left")
+
+#         df = df[df["T"] > 0] # remove expired options
+#         df = df[df["ccy"] == "USD"]
+#         df = df[df["open_interest_notional"] >= 10]
+#         df = df.sort_values(["expiry", "strike"])
+
+#         return df
+
+
+#     def get_curve_df(self, df, target_expiry):
+
+#         curve_df = df[
+#             (df["expiry"] == target_expiry) &
+#             (df["option_type"] == "call")
+#         ]
+
+#         curve_df = curve_df.sort_values("strike")
+
+#         return curve_df
 
 
 class OKX:
 
-    def __init__(self, currencies, target_expiry):
+    def __init__(self, currencies):
         self.data = {}
          
         for currency in currencies:
             spot, volume = self.get_spot(currency)
             df = self.get_df(currency)
-            curve_df = self.get_curve_df(df, target_expiry)
+            # curve_df = self.get_curve_df(df, target_expiry)
 
             self.data[currency] = {
                 "spot": spot,
                 "volume": volume,
                 "df": df,
-                "curve_df": curve_df
+                # "curve_df": curve_df
             }
 
 
@@ -381,33 +566,72 @@ class OKX:
 
         spot = float(data["last"])
         volume = float(data["vol24h"])
-        print("spot:", spot, "volume24h:", volume)
+        print(f"currency: {currency}, spot: {spot}, volume24h: {volume}")
 
         return spot, volume
 
 
     def get_df(self, currency):
 
-        url = f"https://www.okx.com/api/v5/public/instruments?instType=OPTION&uly={currency}-USD"
-        data = requests.get(url).json()
-        contract_size = float(data["data"][0]["ctVal"])
-        
-        url = "https://www.okx.com/api/v5/public/open-interest"
-        params = {
-            "instType": "OPTION",
-            "uly": f"{currency}-USD"
-        }
+        def get_contract_size(currency):
 
-        oi = requests.get(url=url, params=params).json()["data"]
+            url = "https://www.okx.com/api/v5/public/instruments"
+            params = {
+                "instType": "OPTION",
+                "uly": f"{currency}-USD"
+            }
+
+            data = requests.get(url, params=params).json()["data"]
+            return float(data[0]["ctVal"])
+
+
+        def get_open_interest(currency):
+
+            url = "https://www.okx.com/api/v5/public/open-interest"
+            params = {
+                "instType": "OPTION",
+                "uly": f"{currency}-USD"
+            }
+
+            return requests.get(url=url, params=params).json()["data"]
+
+
+        def get_summary(currency):
+
+            url = "https://www.okx.com/api/v5/public/opt-summary"
+            params = {
+                "uly": f"{currency}-USD"
+            }
+
+            return requests.get(url=url, params=params).json()["data"]
+
+        # Run all 3 API requests concurrently
+        with ThreadPoolExecutor(max_workers=3) as executor:
+
+            contract_size_future = executor.submit(
+                get_contract_size,
+                currency
+            )
+
+            oi_future = executor.submit(
+                get_open_interest,
+                currency
+            )
+
+            summary_future = executor.submit(
+                get_summary,
+                currency
+            )
+
+            contract_size = contract_size_future.result()
+            oi = oi_future.result()
+            summary = summary_future.result()
+
         oi_df = pd.DataFrame(oi)
         oi_df = oi_df.rename(columns={"oi": "open_interest"})
         oi_df["open_interest"] = oi_df["open_interest"].astype(float)
         oi_df["open_interest_notional"] = oi_df["open_interest"] * contract_size
 
-        url = "https://www.okx.com/api/v5/public/opt-summary"
-        params = {"uly": f"{currency}-USD"}
-
-        summary = requests.get(url=url, params=params).json()["data"]
         summary_df = pd.DataFrame(summary)
         summary_df = summary_df.rename(columns={"markVol": "mark_iv"})
         summary_df["mark_iv"] = summary_df["mark_iv"].astype(float)
@@ -432,34 +656,34 @@ class OKX:
         return df
 
 
-    def get_curve_df(self, df, target_expiry):
-
-        curve_df = df[
-            (df["expiry"] == target_expiry) &
-            (df["option_type"] == "call")
-        ]
-
-        curve_df = curve_df.sort_values("strike")
-
-        return curve_df
+    # def get_curve_df(self, df, target_expiry):
+    
+    #         curve_df = df[
+    #             (df["expiry"] == target_expiry) &
+    #             (df["option_type"] == "call")
+    #         ]
+    
+    #         curve_df = curve_df.sort_values("strike")
+    
+    #         return curve_df
 
 
 class Bybit:
 
-    def __init__(self, currencies, target_expiry):
+    def __init__(self, currencies):
 
         self.data = {}
         
         for currency in currencies:
             spot, volume = self.get_spot(currency)
             df = self.get_df(currency)
-            curve_df = self.get_curve_df(df, target_expiry)
+            # curve_df = self.get_curve_df(df, target_expiry)
 
             self.data[currency] = {
                 "spot": spot,
                 "volume": volume,
                 "df": df,
-                "curve_df": curve_df
+                # "curve_df": curve_df
             }
 
 
@@ -474,7 +698,7 @@ class Bybit:
         
         spot = float(data["lastPrice"])
         volume = float(data["volume24h"])
-        print("spot:", spot, "volume24h:", volume)
+        print(f"currency: {currency}, spot: {spot}, volume24h: {volume}")
 
         return spot, volume
 
@@ -511,13 +735,13 @@ class Bybit:
         return df
 
 
-    def get_curve_df(self, df, target_expiry):
+    # def get_curve_df(self, df, target_expiry):
 
-        curve_df = df[
-            (df["expiry"] == target_expiry) &
-            (df["option_type"] == "call")
-        ]
+    #     curve_df = df[
+    #         (df["expiry"] == target_expiry) &
+    #         (df["option_type"] == "call")
+    #     ]
 
-        curve_df = curve_df.sort_values("strike")
+    #     curve_df = curve_df.sort_values("strike")
 
-        return curve_df
+    #     return curve_df

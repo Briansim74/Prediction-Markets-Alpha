@@ -1,5 +1,4 @@
 import os
-import json
 import uuid
 import numpy as np
 import pandas as pd
@@ -38,12 +37,12 @@ class Portfolio():
 
         for trade in all_trades:
             # print(trade)
-
+    
             fill_id = trade["id"]
-
+    
             if fill_id in fills_df["fill_id"].values:
                 continue
-
+    
             new_fills.append({
                 "fill_id": fill_id,
                 "order_id": trade["taker_order_id"],
@@ -53,27 +52,27 @@ class Portfolio():
                 "side": trade["side"],
                 "price": float(trade["price"]),
                 "shares": float(trade["size"]),
-                "fee_rate_bps": float(trade["fee_rate_bps"]),
+                "fee": float(trade["fee"]),
                 "timestamp": pd.to_datetime(int(trade["match_time"]), unit="s", utc=True),
             })
-
+    
         # Nothing new
         if not new_fills:
             return fills_df
-
-        def get_fee_rate(trade):
-            return float(api.fee_rate(trade["token_id"])["fee_rate"])
-
+    
+        def get_question(trade):
+            return api.market_detail(trade["condition_id"])["question"]
+    
         with ThreadPoolExecutor(max_workers=30) as executor:
-            fee_rates = list(executor.map(get_fee_rate, new_fills))
-
+            questions = list(executor.map(get_question, new_fills))
+    
         new_fills = pd.DataFrame(new_fills)
-        new_fills["fee_rate"] = fee_rates
-
+        new_fills["question"] = questions
+    
         # Append new rows
         fills_df = pd.concat([fills_df, new_fills], ignore_index=True)
         fills_df["timestamp"] = fills_df["timestamp"] = (pd.to_datetime(fills_df["timestamp"], utc=True).astype("datetime64[ms, UTC]"))
-
+    
         return fills_df
 
 
@@ -81,33 +80,44 @@ class Portfolio():
     
         new_fills = []
 
-        for _, order in orders_df_backtest.iterrows():
-            # print(trade)
-
-            order_id = order["order_id"]
-
-            if order_id in fills_df_backtest["order_id"].values:
-                continue
-
-            new_fills.append({
-                "fill_id": "-",
-                "order_id": order["order_id"],
-                "condition_id": order["market"],
-                "token_id": order["token_id"],
-                "outcome": order["outcome"],
-                "side": order["side"],
-                "price": float(order["price"]),
-                "shares": float(order["requested_size"]),
-                "fee_rate_bps": float(api.fee_rate(order["token_id"])["fee_rate"]) * 100.0,
-                "timestamp": pd.to_datetime(order["created_at"]),
-            })
+        # Orders that don't have a fill yet
+        missing = orders_df_backtest[~orders_df_backtest["order_id"].isin(fills_df_backtest["order_id"])].copy()
 
         # Nothing new
-        if not new_fills:
+        if missing.empty:
             return fills_df_backtest
 
+        # Build fills directly from the missing orders
+        new_fills = pd.DataFrame({
+                "fill_id": "-",
+                "order_id": missing["order_id"].values,
+                "condition_id": missing["condition_id"].values,
+                "token_id": missing["token_id"].values,
+                "outcome": missing["outcome"].values,
+                "side": missing["side"].values,
+                "price": missing["price"].astype(float).values,
+                "shares": missing["requested_size"].astype(float).values,
+                "timestamp": pd.to_datetime(missing["created_at"]).values,
+        })
+
+        def get_question(condition_id):
+            return api.market_detail(condition_id)["question"]
+
+        def get_fee_rate(token_id):
+            return float(api.fee_rate(token_id)["fee_rate"])
+    
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            questions = list(executor.map(get_question, new_fills["condition_id"]))
+
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            fee_rates = list(executor.map(get_fee_rate, new_fills["token_id"]))
+
+        new_fills = pd.DataFrame(new_fills)
+        new_fills["question"] = questions
+        new_fills["fee"] = (fee_rates * new_fills["price"] * (1 - new_fills["price"]) * new_fills["shares"] // 0.00001 * 0.00001).round(6)
+
         # Append new rows
-        fills_df_backtest = pd.concat([fills_df_backtest, pd.DataFrame(new_fills)], ignore_index=True)
+        fills_df_backtest = pd.concat([fills_df_backtest, new_fills], ignore_index=True)
         fills_df_backtest["timestamp"] = fills_df_backtest["timestamp"] = (pd.to_datetime(fills_df_backtest["timestamp"], utc=True).astype("datetime64[ms, UTC]"))
 
         return fills_df_backtest
@@ -150,12 +160,6 @@ class Portfolio():
                 orders_df.loc[idx, "remaining_size"] = (order.get("original_size", 0) - order.get("size_matched", 0))
 
         return orders_df
-
-
-    def fee(self, price, fee_rate):
-        #fee = C × feeRate × p × (1 - p)
-        #Where C = number of shares traded and p = price of the shares.
-        return fee_rate * price * (1 - price)
     
 
     #FIFO matching
@@ -208,20 +212,12 @@ class Portfolio():
                 side = trade["side"]
                 shares = float(trade["shares"])
                 price = float(trade["price"])
-
-                # fee_rate_bps = float(trade["fee_rate_bps"])
-                # fee_rate = fee_rate_bps / 10_000
-
-                # # Fee for the entire fill.
-                # fee = shares * price * fee_rate
-                
-                fee_rate = float(trade["fee_rate"])
-                fee_per_share = self.fee(price, fee_rate)
+                fee = float(trade["fee"])
 
                 if side == "BUY":
 
                     # Store this BUY as a FIFO lot.
-                    # fee_per_share = fee / shares if shares > 0 else 0
+                    fee_per_share = fee / shares
 
                     buy_lots.append({
                         "shares": shares,
@@ -232,8 +228,7 @@ class Portfolio():
                 elif side == "SELL":
 
                     remaining_to_sell = shares
-                    # sell_fee_per_share = fee / shares if shares > 0 else 0
-                    sell_fee_per_share = fee_per_share
+                    sell_fee_per_share = fee / shares
 
                     while remaining_to_sell > 0:
 
@@ -289,6 +284,7 @@ class Portfolio():
             first_trade = trades.iloc[0]
 
             positions.append({
+                "question": first_trade["question"],
                 "condition_id": first_trade["condition_id"],
                 "token_id": token_id,
                 "outcome": first_trade.get("outcome"),
@@ -301,6 +297,7 @@ class Portfolio():
             })
 
             realized.append({
+                "question": first_trade["question"],
                 "condition_id": first_trade["condition_id"],
                 "token_id": token_id,
                 "outcome": first_trade.get("outcome"),
@@ -317,8 +314,7 @@ class Portfolio():
 
     def reconcile_positions(self, api, positions_df):
 
-        for _, row in positions_df.iterrows():
-
+        def check_position(row):
             token_id = row["token_id"]
 
             balance = api.balance(
@@ -329,19 +325,34 @@ class Portfolio():
             live_shares = float(balance["balance"])
             recorded_shares = float(row["shares"])
 
-            if abs(live_shares - recorded_shares) > 0.001:
+            return {
+                "token_id": token_id,
+                "live_shares": live_shares,
+                "recorded_shares": recorded_shares,
+                "synced": abs(live_shares - recorded_shares) <= 0.001,
+            }
+
+        rows = positions_df.to_dict("records")
+
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            results = list(executor.map(check_position, rows))
+
+        for result in results:
+            if not result["synced"]:
                 print(
-                    f"POSITION MISMATCH: {token_id} "
-                    f"recorded={recorded_shares}, "
-                    f"live={live_shares}"
+                    f"POSITION MISMATCH: {result['token_id']} "
+                    f"recorded={result['recorded_shares']}, "
+                    f"live={result['live_shares']}"
                 )
             else:
-                print("POSITIONS SYNCED")
+                print(f"POSITION SYNCED: {result['token_id']}")
 
-    # def fee(self, price, fee_rate):
-    #     #fee = C × feeRate × p × (1 - p)
-    #     #Where C = number of shares traded and p = price of the shares.
-    #     return fee_rate * price * (1 - price)
+
+    def fee(self, price, fee_rate):
+        #fee = C × feeRate × p × (1 - p)
+        #Where C = number of shares traded and p = price of the shares.
+        return fee_rate * price * (1 - price)
+
 
     def manage_open_orders(self, api, orders_df, markets_df, ENTRY_EV_THRESHOLD, EXIT_EV_THRESHOLD):
 
@@ -620,6 +631,131 @@ class Portfolio():
         return equity_df
 
 
+    def calculate_equity_test(self, api, positions_df, realized_pnl_df, equity_df, cash):
+        """
+        Calculate the current account equity and P&L.
+
+        Uses the last row of equity_df to determine
+        previous_equity and previous_timestamp.
+        """
+
+        # ---------------------------------------------------------
+        # 0. Get previous equity snapshot
+        # ---------------------------------------------------------
+        if equity_df.empty:
+            previous_equity = None
+        else:
+            previous_row = equity_df.iloc[-1]
+            previous_equity = float(previous_row["equity"])
+
+        # ---------------------------------------------------------
+        # 1. Get current cash
+        # ---------------------------------------------------------
+
+        # ---------------------------------------------------------
+        # 2. Market value of open positions
+        # ---------------------------------------------------------
+        if positions_df.empty:
+            market_value = 0.0
+            unrealized_pnl = 0.0
+
+        else:
+            if "market_value" in positions_df.columns:
+                market_value = positions_df["market_value"].sum()
+            else:
+                market_value = (positions_df["shares"] * positions_df["current_price"]).sum()
+
+            if "unrealized_pnl" in positions_df.columns:
+                unrealized_pnl = positions_df["unrealized_pnl"].sum()
+
+            else:
+                unrealized_pnl = (positions_df["shares"] * (
+                    positions_df["current_price"] - positions_df["avg_entry_price"])).sum()
+
+        # ---------------------------------------------------------
+        # 3. Realized P&L
+        # ---------------------------------------------------------
+        if realized_pnl_df.empty:
+            realized_pnl = 0.0
+        else:
+            realized_pnl = realized_pnl_df["realized_pnl"].sum()
+
+        # ---------------------------------------------------------
+        # 4. Total equity
+        # ---------------------------------------------------------
+        equity = cash + market_value
+
+        # ---------------------------------------------------------
+        # 5. Return
+        # ---------------------------------------------------------
+        if previous_equity is None or previous_equity == 0:
+            period_return = None
+        else:
+            period_return = equity / previous_equity - 1
+
+        # ---------------------------------------------------------
+        # 6. Return new row
+        # ---------------------------------------------------------
+        equity_row = {
+            "timestamp": datetime.now(timezone.utc),
+            "cash": cash,
+            "market_value": market_value,
+            "equity": equity,
+            "realized_pnl": realized_pnl,
+            "unrealized_pnl": unrealized_pnl,
+            "period_return": period_return,
+        }
+
+        equity_df = pd.concat([equity_df, pd.DataFrame([equity_row])], ignore_index=True)
+        equity_df["timestamp"] = pd.to_datetime(equity_df["timestamp"], utc=True)
+        
+        # ---------------------------------------------------------
+        # 7. Calculate Sharpe / Sortino
+        # ---------------------------------------------------------
+        returns = equity_df["daily_return"].dropna()
+
+        if len(returns) >= 2:
+
+            # Sharpe
+            volatility = returns.std(ddof=1)
+
+            if volatility > 0:
+                sharpe = returns.mean() / volatility
+            else:
+                sharpe = np.nan
+
+            # Sortino
+            downside_returns = returns[returns < 0]
+
+            if len(downside_returns) > 0:
+                downside_deviation = np.sqrt((downside_returns ** 2).mean())
+
+                sortino = returns.mean() / downside_deviation
+
+            else:
+                sortino = np.nan
+
+        else:
+            sharpe = np.nan
+            sortino = np.nan
+
+        # ---------------------------------------------------------
+        # 8. Store metrics
+        # ---------------------------------------------------------
+        equity_df.loc[equity_df.index[-1], "sharpe"] = sharpe
+        equity_df.loc[equity_df.index[-1], "sortino"] = sortino
+
+        # ---------------------------------------------------------
+        # 9. Print
+        # ---------------------------------------------------------
+        print(f"Equity:  {equity:,.2f}")
+        print(f"Return:  {period_return:.4%}" if pd.notna(period_return) else "Return: N/A")
+        print(f"Sharpe:  {sharpe:.4f}" if pd.notna(sharpe) else "Sharpe: N/A")
+        print(f"Sortino: {sortino:.4f}" if pd.notna(sortino) else "Sortino: N/A")
+
+        return equity_df
+
+
     def format_signal_exit(self, best_action, market, pos, current_bid,
                 client_oid, hold_ev, exit_ev, fee_rate, EXIT_EV_THRESHOLD):
 
@@ -725,12 +861,13 @@ class Portfolio():
                         print(order)
                 
                         order_row = {
+                            "question": pos["question"],
                             "order_id": order["clob_order_id"],
                             "condition_id": condition_id,
                             "token_id": pos["token_id"],
                             "outcome": pos["outcome"],
-                            "side": "sell",
-                            "price": price,
+                            "side": "SELL",
+                            "price": float(price),
                             "requested_size": normalized_size,
                             "order_type": "GTC",
                             "status": "OPEN",
@@ -756,7 +893,7 @@ class Portfolio():
 
 
     # Inventory Management Step
-    def run_risk_management_test(self, api, positions_df_backtest, markets_df, orders_df_backtest, EXIT_EV_THRESHOLD):
+    def run_risk_management_test(self, api, positions_df_backtest, markets_df, orders_df_backtest, cash, EXIT_EV_THRESHOLD):
 
         for _, pos in positions_df_backtest.iterrows():
 
@@ -789,6 +926,8 @@ class Portfolio():
 
             client_oid = str(uuid.uuid4())
 
+            print("\n{ TEST } - EXIT / HOLD SIGNAL")
+
             self.format_signal_exit(best_action, market, pos, current_bid,
                         client_oid, hold_ev, exit_ev, fee_rate, EXIT_EV_THRESHOLD)
 
@@ -814,12 +953,13 @@ class Portfolio():
                         print(order)
                 
                         order_row = {
+                            "question": pos["question"],
                             "order_id": order["clob_order_id"],
                             "condition_id": condition_id,
                             "token_id": pos["token_id"],
                             "outcome": pos["outcome"],
-                            "side": "sell",
-                            "price": price,
+                            "side": "SELL",
+                            "price": float(price),
                             "requested_size": normalized_size,
                             "order_type": "GTC",
                             "status": "OPEN",
@@ -830,6 +970,14 @@ class Portfolio():
                         orders_df_backtest = pd.concat([orders_df_backtest, pd.DataFrame([order_row])], ignore_index=True)
                         orders_df_backtest["created_at"] = pd.to_datetime(orders_df_backtest["created_at"], utc=True)
                         orders_df_backtest["cancelled_at"] = pd.to_datetime(orders_df_backtest["cancelled_at"], utc=True)
+
+                        fee_rate = float(api.fee_rate(pos["token_id"])["fee_rate"])
+                        fee = self.fee(price, fee_rate)
+                        nominal_price = normalized_size * (float(price) - fee)
+
+                        print("cash:", cash)
+                        cash += nominal_price
+                        print("Updated cash:", cash, "price:", price, "fee:", fee)
                 
                         print("\nLIMIT ORDER RECORDED\n\n")
             
@@ -915,7 +1063,7 @@ class Portfolio():
                 best_action = "buy_yes_ev"
                 ev = trade["buy_yes_ev"]
                 token_id = trade["yes_token"]
-                outcome = "YES"
+                outcome = "Yes"
                 kelly = trade["buy_yes_kelly"]
                 current_ask = trade["yes_ask"]
     
@@ -923,7 +1071,7 @@ class Portfolio():
                 best_action = "buy_no_ev"
                 ev = trade["buy_no_ev"]
                 token_id = trade["no_token"]
-                outcome = "NO"
+                outcome = "No"
                 kelly = trade["buy_no_kelly"]
                 current_ask = trade["no_ask"]
     
@@ -987,11 +1135,12 @@ class Portfolio():
                     print(order)
     
                     order_row = {
+                        "question": trade["question"],
                         "order_id": order["clob_order_id"],
                         "condition_id": trade["conditionId"],
                         "token_id": token_id,
                         "outcome": outcome,
-                        "side": "buy",
+                        "side": "BUY",
                         "price": float(price),
                         "requested_size": normalized_size,
                         "order_type": "GTC",
@@ -1018,10 +1167,10 @@ class Portfolio():
 
 
     # New Opportunities Step
-    def run_new_opportunities_test(self, api, opportunities_df, orders_df_backtest, 
+    def run_new_opportunities_test(self, api, opportunities_df, orders_df_backtest, cash,
                                 ENTRY_EV_THRESHOLD=0.02, MAX_POSITION=0.05, FRACTION=0.25):
 
-        cash = float(api.balance()["balance"])
+        # cash = float(api.balance()["balance"])
             
         for _, trade in opportunities_df.iterrows():
     
@@ -1034,7 +1183,7 @@ class Portfolio():
                 best_action = "buy_yes_ev"
                 ev = trade["buy_yes_ev"]
                 token_id = trade["yes_token"]
-                outcome = "YES"
+                outcome = "Yes"
                 kelly = trade["buy_yes_kelly"]
                 current_ask = trade["yes_ask"]
     
@@ -1042,7 +1191,7 @@ class Portfolio():
                 best_action = "buy_no_ev"
                 ev = trade["buy_no_ev"]
                 token_id = trade["no_token"]
-                outcome = "NO"
+                outcome = "No"
                 kelly = trade["buy_no_kelly"]
                 current_ask = trade["no_ask"]
     
@@ -1071,6 +1220,8 @@ class Portfolio():
             normalized_size = api.normalize_size(size)
             
             client_oid = str(uuid.uuid4())
+
+            print("\n{ TEST } - BUY SIGNAL")
     
             self.format_signal_entry(trade, outcome, best_action, kelly, 
                                             normalized_size, current_ask, token_id, 
@@ -1098,12 +1249,13 @@ class Portfolio():
                     print(order)
     
                     order_row = {
+                        "question": trade["question"],
                         "order_id": order["clob_order_id"],
                         "condition_id": trade["conditionId"],
                         "token_id": token_id,
                         "outcome": outcome,
-                        "side": "buy",
-                        "price": price,
+                        "side": "BUY",
+                        "price": float(price),
                         "requested_size": normalized_size,
                         "order_type": "GTC",
                         "status": "OPEN",
@@ -1114,6 +1266,14 @@ class Portfolio():
                     orders_df_backtest = pd.concat([orders_df_backtest, pd.DataFrame([order_row])], ignore_index=True)
                     orders_df_backtest["created_at"] = pd.to_datetime(orders_df_backtest["created_at"], utc=True)
                     orders_df_backtest["cancelled_at"] = pd.to_datetime(orders_df_backtest["cancelled_at"], utc=True)
+
+                    fee_rate = trade["feeSchedule"]["rate"]
+                    fee = self.fee(price, fee_rate)
+                    nominal_price = normalized_size * (float(price) + fee)
+
+                    print("cash:", cash)
+                    cash -= nominal_price
+                    print("Updated cash:", cash, "price:", price, "fee:", fee)
             
                     print("\nLIMIT ORDER RECORDED\n\n")
     
@@ -1126,6 +1286,18 @@ class Portfolio():
                 print("\nLIMIT SKIPPING ORDER\n\n")
     
         return orders_df_backtest
+
+
+    def update_cash(self, cash, cash_df_backtest):
+
+        new_row = pd.DataFrame([{
+            "balance": cash,
+            "timestamp": datetime.now(timezone.utc)
+        }])
+
+        cash_df_backtest = pd.concat([cash_df_backtest, new_row], ignore_index=True)
+
+        return cash_df_backtest
 
 
     def save_snapshots(self, DATA_DIR, df, df_name):

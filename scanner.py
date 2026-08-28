@@ -7,6 +7,38 @@ from dateutil import parser
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
+class MarketScanner1:
+
+    def __init__(self, api):
+        self.api = api
+
+
+    def scan_market(self, markets_df):
+
+        markets_df = markets_df[
+            (markets_df["acceptingOrders"] == True) &
+            (markets_df["enableOrderBook"] == True)
+        ]
+
+        markets_df["tokens"] = markets_df["clobTokenIds"].apply(json.loads)
+        markets_df["yes_token"] = markets_df["tokens"].apply(lambda x: x[0])
+        markets_df["no_token"] = markets_df["tokens"].apply(lambda x: x[1])
+
+        book_cols = [
+            "yes_book",
+            "no_book",
+            "yes_bid",
+            "yes_ask",
+            "no_bid",
+            "no_ask",
+        ]
+
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            markets_df[book_cols] = list(executor.map(
+                self.get_books, (row for _, row in markets_df.iterrows())))
+
+        return markets_df
+    
 class MarketScanner:
 
     def __init__(self, api):
@@ -99,22 +131,18 @@ class MarketScanner:
         opportunities_df = markets_df[markets_df["best_ev"] > 0].sort_values("best_ev", ascending=False)
 
         # new sorting order
-        cols = ["id", "question", "endDate", "yes_ask", "no_ask", "model_prob"]
+        cols = ["question", "endDate", "yes_ask", "yes_bid", "no_ask", "no_bid", "model_prob"]
 
         markets_df = markets_df[cols + [c for c in markets_df.columns if c not in cols]]
         opportunities_df = opportunities_df[cols + [c for c in opportunities_df.columns if c not in cols]]
+        arb_candidates_df = opportunities_df.copy()
+        arb_candidates_df = arb_candidates_df.sort_values(by=["currency", "event_type", "direction", "strike"])
 
         self.markets_df = markets_df
         self.opportunities_df = opportunities_df
+        self.arb_candidates_df = arb_candidates_df
 
-        return self.markets_df, self.opportunities_df
-
-
-    # def is_market_keyword(self, row, KEYWORDS):
-
-    #     text = (str(row["question"]) + " " + str(row.get("description", ""))).lower()
-
-    #     return any(k in text for k in KEYWORDS)
+        return self.markets_df, self.opportunities_df, self.arb_candidates_df
 
 
     def extract_currency(self, row, CURRENCIES):
@@ -472,3 +500,238 @@ class MarketScanner:
             "model_prob": model_prob,
             **ev
         })
+
+
+    def scan_arbitrage(self, arb_candidates_df):
+
+        def fee(price, fee_rate):
+            #fee = C × feeRate × p × (1 - p)
+            #Where C = number of shares traded and p = price of the shares.
+            return fee_rate * price * (1 - price)
+        
+        cross_market_arbs = []
+        cross_market_arb_columns = [
+            "currency",
+            "event_type",
+            "direction",
+            "A_strike",
+            "A_question",
+            "A_id",
+            "A_side",
+            "A_price",
+            "A_cost",
+            "B_strike",
+            "B_question",
+            "B_id",
+            "B_side",
+            "B_price",
+            "B_cost",
+            "total_cost",
+            "guaranteed_profit",
+        ]
+
+        for (currency, event_type, direction, strike), group_df in arb_candidates_df.groupby(["currency", "event_type", "direction", "strike"]):
+            n = len(group_df)
+            if n == 2:
+                print(group_df)
+
+                A = group_df.iloc[0]
+                B = group_df.iloc[1]
+
+                yes_A = A["yes_ask"] + fee(A["yes_ask"], A["feeSchedule"]["rate"])
+                no_B = B["no_ask"] + fee(B["no_ask"], B["feeSchedule"]["rate"])
+
+                yes_B = B["yes_ask"] + fee(B["yes_ask"], B["feeSchedule"]["rate"])
+                no_A = A["no_ask"] + fee(A["no_ask"], A["feeSchedule"]["rate"])
+                
+                arb_1 = yes_A + no_B
+                arb_2 = yes_B + no_A
+
+                guaranteed_profit_1 = 1 - arb_1
+                guaranteed_profit_2 = 1 - arb_2
+
+                print("arb_1:", arb_1)
+                print("arb_2:", arb_2)
+                print("guaranteed_profit_1:", guaranteed_profit_1)
+                print("guaranteed_profit_2:", guaranteed_profit_2)
+                print("")
+
+                if guaranteed_profit_1 > 0:
+                    cross_market_arbs.append({
+                    "currency": currency,
+                    "event_type": event_type,
+                    "direction": direction,
+
+                    # Lower leg
+                    "A_strike": A["strike"],
+                    "A_question": A["question"],
+                    "A_id": A["id"],
+                    "A_side": "Yes",
+                    "A_price": A["yes_ask"],
+                    "A_cost": yes_A,
+
+                    # Higher leg
+                    "B_strike": B["strike"],
+                    "B_question": B["question"],
+                    "B_id": B["id"],
+                    "B_side": "No",
+                    "B_price": B["no_ask"],
+                    "B_cost": no_B,
+
+                    # Arb
+                    "total_cost": arb_1,
+                    "guaranteed_profit": guaranteed_profit_1,
+                })
+
+                if guaranteed_profit_2 > 0:
+                    cross_market_arbs.append({
+                    "currency": currency,
+                    "event_type": event_type,
+                    "direction": direction,
+
+                    # Lower leg
+                    "A_strike": A["strike"],
+                    "A_question": A["question"],
+                    "A_id": A["id"],
+                    "A_side": "No",
+                    "A_price": A["no_ask"],
+                    "A_cost": no_A,
+
+                    # Higher leg
+                    "B_strike": B["strike"],
+                    "B_question": B["question"],
+                    "B_id": B["id"],
+                    "B_side": "Yes",
+                    "B_price": B["yes_ask"],
+                    "B_cost": yes_B,
+
+                    # Arb
+                    "total_cost": arb_2,
+                    "guaranteed_profit": guaranteed_profit_2,
+                })
+
+        cross_market_arb_df = pd.DataFrame(cross_market_arbs, columns=cross_market_arb_columns)
+
+
+        vertical_arbs = []
+        vertical_arb_columns = [
+            "currency",
+            "event_type",
+            "direction",
+            "lower_strike",
+            "lower_question",
+            "lower_id",
+            "lower_side",
+            "lower_price",
+            "lower_cost",
+            "higher_strike",
+            "higher_question",
+            "higher_id",
+            "higher_side",
+            "higher_price",
+            "higher_cost",
+            "total_cost",
+            "guaranteed_profit",
+        ]
+
+        for (currency, event_type, direction), group_df in arb_candidates_df.groupby(["currency", "event_type", "direction"]):
+            group_df = group_df.sort_values("strike").reset_index(drop=True)
+            n = len(group_df)
+            
+            if direction == "up":
+                print("up\n")
+
+                for i in range(1, n):
+                    lower = group_df.iloc[i - 1]
+                    higher = group_df.iloc[i]
+
+                    lower_cost = lower["yes_ask"] + fee(lower["yes_ask"], lower["feeSchedule"]["rate"])
+
+                    higher_cost = higher["no_ask"] + fee(higher["no_ask"], higher["feeSchedule"]["rate"])
+
+                    cost = lower_cost + higher_cost
+                    guaranteed_profit = 1 - cost
+
+                    print("lower_cost:", lower_cost)
+                    print("higher_cost:", higher_cost)
+                    print("cost:", cost)
+                    print("guaranteed_profit:", guaranteed_profit)
+                    print("")
+
+                    if guaranteed_profit > 0:
+                        vertical_arbs.append({
+                        "currency": currency,
+                        "event_type": event_type,
+                        "direction": direction,
+
+                        # Lower leg
+                        "lower_strike": lower["strike"],
+                        "lower_question": lower["question"],
+                        "lower_id": lower["id"],
+                        "lower_side": "Yes",
+                        "lower_price": lower["yes_ask"],
+                        "lower_cost": lower_cost,
+
+                        # Higher leg
+                        "higher_strike": higher["strike"],
+                        "higher_question": higher["question"],
+                        "higher_id": higher["id"],
+                        "higher_side": "No",
+                        "higher_price": higher["no_ask"],
+                        "higher_cost": higher_cost,
+
+                        # Arb
+                        "total_cost": cost,
+                        "guaranteed_profit": guaranteed_profit,
+                    })
+
+            elif direction == "down":
+                print("down\n")
+
+                for i in range(1, n):
+                    lower = group_df.iloc[i - 1]
+                    higher = group_df.iloc[i]
+
+                    lower_cost = lower["no_ask"] + fee(lower["no_ask"], lower["feeSchedule"]["rate"])
+
+                    higher_cost = higher["yes_ask"] + fee(higher["yes_ask"], higher["feeSchedule"]["rate"])
+
+                    cost = lower_cost + higher_cost
+                    guaranteed_profit = 1 - cost
+
+                    print("lower_cost:", lower_cost)
+                    print("higher_cost:", higher_cost)
+                    print("cost:", cost)
+                    print("guaranteed_profit:", guaranteed_profit)
+                    print("")
+
+                    if guaranteed_profit > 0:
+                        vertical_arbs.append({
+                        "currency": currency,
+                        "event_type": event_type,
+                        "direction": direction,
+
+                        # Lower leg
+                        "lower_strike": lower["strike"],
+                        "lower_question": lower["question"],
+                        "lower_id": lower["id"],
+                        "lower_side": "No",
+                        "lower_price": lower["no_ask"],
+                        "lower_cost": lower_cost,
+
+                        # Higher leg
+                        "higher_strike": higher["strike"],
+                        "higher_question": higher["question"],
+                        "higher_id": higher["id"],
+                        "higher_side": "Yes",
+                        "higher_price": higher["yes_ask"],
+                        "higher_cost": higher_cost,
+
+                        # Arb
+                        "total_cost": cost,
+                        "guaranteed_profit": guaranteed_profit,
+                    })
+
+        vertical_arb_df = pd.DataFrame(vertical_arbs, columns=vertical_arb_columns)
+
+        return cross_market_arb_df, vertical_arb_df
