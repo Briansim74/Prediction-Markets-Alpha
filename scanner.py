@@ -7,7 +7,7 @@ from dateutil import parser
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
-class MarketScanner1:
+class MarketScannerFast:
 
     def __init__(self, api):
         self.api = api
@@ -20,25 +20,18 @@ class MarketScanner1:
             (markets_df["enableOrderBook"] == True)
         ]
 
-        markets_df["tokens"] = markets_df["clobTokenIds"].apply(json.loads)
-        markets_df["yes_token"] = markets_df["tokens"].apply(lambda x: x[0])
-        markets_df["no_token"] = markets_df["tokens"].apply(lambda x: x[1])
+        markets_df["outcomePrices"] = markets_df["outcomePrices"].apply(json.loads)
+        markets_df["yes_price"] = markets_df["outcomePrices"].apply(lambda x: float(x[0]))
+        markets_df["no_price"] = markets_df["outcomePrices"].apply(lambda x: float(x[1]))
 
-        book_cols = [
-            "yes_book",
-            "no_book",
-            "yes_bid",
-            "yes_ask",
-            "no_bid",
-            "no_ask",
-        ]
-
-        with ThreadPoolExecutor(max_workers=30) as executor:
-            markets_df[book_cols] = list(executor.map(
-                self.get_books, (row for _, row in markets_df.iterrows())))
+        markets_df["yes_bid_est"] = markets_df["yes_price"] - markets_df["spread"] / 2
+        markets_df["yes_ask_est"] = markets_df["yes_price"] + markets_df["spread"] / 2
+        markets_df["no_bid_est"] = markets_df["no_price"] - markets_df["spread"] / 2
+        markets_df["no_ask_est"] = markets_df["no_price"] + markets_df["spread"] / 2
 
         return markets_df
-    
+
+
 class MarketScanner:
 
     def __init__(self, api):
@@ -88,8 +81,7 @@ class MarketScanner:
         )
 
         markets_df["expiry_dt"] = pd.to_datetime(markets_df["expiry"], format="%Y%m%d", utc=True)
-        markets_df["T"] = (markets_df["expiry_dt"] - datetime.now(
-            timezone.utc)).dt.total_seconds() / (365.25 * 24 * 3600)
+        markets_df["T"] = (markets_df["expiry_dt"] - datetime.now(timezone.utc)).dt.total_seconds() / (365.25 * 24 * 3600)
 
         markets_df = markets_df[markets_df["T"] > 0]
         markets_df = markets_df.dropna(subset=["currency", "strike", "expiry", "direction", "event_type"])
@@ -733,5 +725,11 @@ class MarketScanner:
                     })
 
         vertical_arb_df = pd.DataFrame(vertical_arbs, columns=vertical_arb_columns)
+
+        if(len(cross_market_arb_df) > 1):
+            print("Cross Market Arbitrage Found!")
+
+        if(len(cross_market_arb_df) > 1):
+            print("Vertical Arbitrage Found!")
 
         return cross_market_arb_df, vertical_arb_df

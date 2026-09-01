@@ -37,15 +37,15 @@ class Portfolio():
 
         for trade in all_trades:
             # print(trade)
-    
+
             fill_id = trade["id"]
-    
+
             if fill_id in fills_df["fill_id"].values:
                 continue
-    
+
             new_fills.append({
                 "fill_id": fill_id,
-                "order_id": trade["taker_order_id"],
+                "order_id": trade["taker_order_id"] if trade["trader_side"] == "TAKER" else trade["maker_orders"][0]["order_id"],
                 "condition_id": trade["market"],
                 "token_id": trade["asset_id"],
                 "outcome": trade["outcome"],
@@ -55,77 +55,32 @@ class Portfolio():
                 "fee": float(trade["fee"]),
                 "timestamp": pd.to_datetime(int(trade["match_time"]), unit="s", utc=True),
             })
-    
+
         # Nothing new
         if not new_fills:
             return fills_df
-    
+
         def get_question(trade):
             return api.market_detail(trade["condition_id"])["question"]
-    
+
         with ThreadPoolExecutor(max_workers=30) as executor:
             questions = list(executor.map(get_question, new_fills))
-    
+
         new_fills = pd.DataFrame(new_fills)
         new_fills["question"] = questions
-    
+
         # Append new rows
         fills_df = pd.concat([fills_df, new_fills], ignore_index=True)
         fills_df["timestamp"] = fills_df["timestamp"] = (pd.to_datetime(fills_df["timestamp"], utc=True).astype("datetime64[ms, UTC]"))
-    
+        fills_df = fills_df.sort_values("timestamp")
+
         return fills_df
 
 
-    def sync_fills_test(self, api, orders_df_backtest, fills_df_backtest):
-    
-        new_fills = []
-
-        # Orders that don't have a fill yet
-        missing = orders_df_backtest[~orders_df_backtest["order_id"].isin(fills_df_backtest["order_id"])].copy()
-
-        # Nothing new
-        if missing.empty:
-            return fills_df_backtest
-
-        # Build fills directly from the missing orders
-        new_fills = pd.DataFrame({
-                "fill_id": "-",
-                "order_id": missing["order_id"].values,
-                "condition_id": missing["condition_id"].values,
-                "token_id": missing["token_id"].values,
-                "outcome": missing["outcome"].values,
-                "side": missing["side"].values,
-                "price": missing["price"].astype(float).values,
-                "shares": missing["requested_size"].astype(float).values,
-                "timestamp": pd.to_datetime(missing["created_at"]).values,
-        })
-
-        def get_question(condition_id):
-            return api.market_detail(condition_id)["question"]
-
-        def get_fee_rate(token_id):
-            return float(api.fee_rate(token_id)["fee_rate"])
-    
-        with ThreadPoolExecutor(max_workers=30) as executor:
-            questions = list(executor.map(get_question, new_fills["condition_id"]))
-
-        with ThreadPoolExecutor(max_workers=30) as executor:
-            fee_rates = list(executor.map(get_fee_rate, new_fills["token_id"]))
-
-        new_fills = pd.DataFrame(new_fills)
-        new_fills["question"] = questions
-        new_fills["fee"] = (fee_rates * new_fills["price"] * (1 - new_fills["price"]) * new_fills["shares"] // 0.00001 * 0.00001).round(6)
-
-        # Append new rows
-        fills_df_backtest = pd.concat([fills_df_backtest, new_fills], ignore_index=True)
-        fills_df_backtest["timestamp"] = fills_df_backtest["timestamp"] = (pd.to_datetime(fills_df_backtest["timestamp"], utc=True).astype("datetime64[ms, UTC]"))
-
-        return fills_df_backtest
-
-
     # Doesnt cancel filled orders, historical order ledger
-    def sync_orders(self, api, orders_df):
+    def sync_orders(self, api, orders_df, fills_df):
 
+        # 1. Sync currently active orders
         api_orders = api.list_orders()
 
         for order in api_orders["orders"]:
@@ -143,21 +98,66 @@ class Portfolio():
                     "side": order.get("side"),
                     "price": order.get("price"),
                     "requested_size": order.get("original_size"),
-                    "filled_size": order.get("size_matched", 0),
-                    "remaining_size": (order.get("original_size", 0) - order.get("size_matched", 0)),
+                    "filled_size": float(order.get("size_matched", 0)),
+                    "remaining_size": (
+                        float(order.get("original_size", 0))
+                        - float(order.get("size_matched", 0))
+                    ),
                     "status": order.get("status"),
                     "created_at": order.get("created_at"),
                     "cancelled_at": None,
                 }
 
-                orders_df = pd.concat([orders_df, pd.DataFrame([order_row])], ignore_index=True)
+                orders_df = pd.concat(
+                    [orders_df, pd.DataFrame([order_row])],
+                    ignore_index=True
+                )
 
             else:
                 idx = orders_df.index[mask][0]
 
                 orders_df.loc[idx, "status"] = order.get("status")
-                orders_df.loc[idx, "filled_size"] = order.get("size_matched", 0)
-                orders_df.loc[idx, "remaining_size"] = (order.get("original_size", 0) - order.get("size_matched", 0))
+                orders_df.loc[idx, "filled_size"] = float(
+                    order.get("size_matched", 0)
+                )
+                orders_df.loc[idx, "remaining_size"] = (
+                    float(order.get("original_size", 0))
+                    - float(order.get("size_matched", 0))
+                )
+
+        # ---------------------------------------------------------
+        # 2. Reconcile fills BY ORDER ID
+        # ---------------------------------------------------------
+        fills_by_order = (fills_df.groupby("order_id")["shares"].sum())
+
+        for order_id, filled_size in fills_by_order.items():
+
+            mask = orders_df["order_id"] == order_id
+
+            # Fill belongs to an order we don't currently have locally
+            if not mask.any():
+                print(f"Warning: fill for unknown order {order_id}")
+                continue
+
+            idx = orders_df.index[mask][0]
+
+            filled_size = float(filled_size)
+
+            orders_df.loc[idx, "filled_size"] = filled_size
+
+            requested_size = orders_df.loc[idx, "requested_size"]
+
+            if pd.notna(requested_size):
+
+                requested_size = float(requested_size)
+
+                orders_df.loc[idx, "remaining_size"] = max(requested_size - filled_size, 0)
+
+                if filled_size >= requested_size:
+                    orders_df.loc[idx, "status"] = "FILLED"
+
+                elif filled_size > 0:
+                    orders_df.loc[idx, "status"] = "PARTIALLY_FILLED"
 
         return orders_df
     
@@ -188,10 +188,9 @@ class Portfolio():
         """
 
         positions = []
-        realized = []
 
         # Process each token independently.
-        for token_id, trades in fills_df.groupby("token_id"):
+        for token_id, trades in fills_df.groupby("token_id", sort=False):
 
             # FIFO queue of open BUY lots.
             # Each lot contains:
@@ -296,20 +295,9 @@ class Portfolio():
                 "realized_fees": realized_fees,
             })
 
-            realized.append({
-                "question": first_trade["question"],
-                "condition_id": first_trade["condition_id"],
-                "token_id": token_id,
-                "outcome": first_trade.get("outcome"),
-                "realized_shares": realized_shares,
-                "realized_pnl": realized_pnl,
-                "realized_fees": realized_fees,
-            })
-
         positions_df = pd.DataFrame(positions)
-        realized_pnl_df = pd.DataFrame(realized)
 
-        return positions_df, realized_pnl_df
+        return positions_df
 
 
     def reconcile_positions(self, api, positions_df):
@@ -505,7 +493,7 @@ class Portfolio():
         return positions_df
 
     
-    def calculate_equity(self, api, positions_df, realized_pnl_df, equity_df):
+    def calculate_equity(self, api, positions_df, equity_df):
         """
         Calculate the current account equity and P&L.
 
@@ -550,135 +538,10 @@ class Portfolio():
         # ---------------------------------------------------------
         # 3. Realized P&L
         # ---------------------------------------------------------
-        if realized_pnl_df.empty:
-            realized_pnl = 0.0
-        else:
-            realized_pnl = realized_pnl_df["realized_pnl"].sum()
-
-        # ---------------------------------------------------------
-        # 4. Total equity
-        # ---------------------------------------------------------
-        equity = cash + market_value
-
-        # ---------------------------------------------------------
-        # 5. Return
-        # ---------------------------------------------------------
-        if previous_equity is None or previous_equity == 0:
-            period_return = None
-        else:
-            period_return = equity / previous_equity - 1
-
-        # ---------------------------------------------------------
-        # 6. Return new row
-        # ---------------------------------------------------------
-        equity_row = {
-            "timestamp": datetime.now(timezone.utc),
-            "cash": cash,
-            "market_value": market_value,
-            "equity": equity,
-            "realized_pnl": realized_pnl,
-            "unrealized_pnl": unrealized_pnl,
-            "period_return": period_return,
-        }
-
-        equity_df = pd.concat([equity_df, pd.DataFrame([equity_row])], ignore_index=True)
-        equity_df["timestamp"] = pd.to_datetime(equity_df["timestamp"], utc=True)
-        
-        # ---------------------------------------------------------
-        # 7. Calculate Sharpe / Sortino
-        # ---------------------------------------------------------
-        returns = equity_df["daily_return"].dropna()
-
-        if len(returns) >= 2:
-
-            # Sharpe
-            volatility = returns.std(ddof=1)
-
-            if volatility > 0:
-                sharpe = returns.mean() / volatility
-            else:
-                sharpe = np.nan
-
-            # Sortino
-            downside_returns = returns[returns < 0]
-
-            if len(downside_returns) > 0:
-                downside_deviation = np.sqrt((downside_returns ** 2).mean())
-
-                sortino = returns.mean() / downside_deviation
-
-            else:
-                sortino = np.nan
-
-        else:
-            sharpe = np.nan
-            sortino = np.nan
-
-        # ---------------------------------------------------------
-        # 8. Store metrics
-        # ---------------------------------------------------------
-        equity_df.loc[equity_df.index[-1], "sharpe"] = sharpe
-        equity_df.loc[equity_df.index[-1], "sortino"] = sortino
-
-        # ---------------------------------------------------------
-        # 9. Print
-        # ---------------------------------------------------------
-        print(f"Equity:  {equity:,.2f}")
-        print(f"Return:  {period_return:.4%}" if pd.notna(period_return) else "Return: N/A")
-        print(f"Sharpe:  {sharpe:.4f}" if pd.notna(sharpe) else "Sharpe: N/A")
-        print(f"Sortino: {sortino:.4f}" if pd.notna(sortino) else "Sortino: N/A")
-
-        return equity_df
-
-
-    def calculate_equity_test(self, api, positions_df, realized_pnl_df, equity_df, cash):
-        """
-        Calculate the current account equity and P&L.
-
-        Uses the last row of equity_df to determine
-        previous_equity and previous_timestamp.
-        """
-
-        # ---------------------------------------------------------
-        # 0. Get previous equity snapshot
-        # ---------------------------------------------------------
-        if equity_df.empty:
-            previous_equity = None
-        else:
-            previous_row = equity_df.iloc[-1]
-            previous_equity = float(previous_row["equity"])
-
-        # ---------------------------------------------------------
-        # 1. Get current cash
-        # ---------------------------------------------------------
-
-        # ---------------------------------------------------------
-        # 2. Market value of open positions
-        # ---------------------------------------------------------
         if positions_df.empty:
-            market_value = 0.0
-            unrealized_pnl = 0.0
-
-        else:
-            if "market_value" in positions_df.columns:
-                market_value = positions_df["market_value"].sum()
-            else:
-                market_value = (positions_df["shares"] * positions_df["current_price"]).sum()
-
-            if "unrealized_pnl" in positions_df.columns:
-                unrealized_pnl = positions_df["unrealized_pnl"].sum()
-
-            else:
-                unrealized_pnl = (positions_df["shares"] * (
-                    positions_df["current_price"] - positions_df["avg_entry_price"])).sum()
-
-        # ---------------------------------------------------------
-        # 3. Realized P&L
-        # ---------------------------------------------------------
-        if realized_pnl_df.empty:
             realized_pnl = 0.0
         else:
-            realized_pnl = realized_pnl_df["realized_pnl"].sum()
+            realized_pnl = positions_df["realized_pnl"].sum()
 
         # ---------------------------------------------------------
         # 4. Total equity
@@ -712,7 +575,7 @@ class Portfolio():
         # ---------------------------------------------------------
         # 7. Calculate Sharpe / Sortino
         # ---------------------------------------------------------
-        returns = equity_df["daily_return"].dropna()
+        returns = equity_df["period_return"].dropna()
 
         if len(returns) >= 2:
 
@@ -802,6 +665,7 @@ class Portfolio():
 
         print("=" * 70)
 
+
     # Inventory Management Step
     def run_risk_management(self, api, positions_df, markets_df, orders_df, EXIT_EV_THRESHOLD):
 
@@ -890,106 +754,6 @@ class Portfolio():
                     print("\nSKIPPING LIMIT ORDER\n\n")
 
         return orders_df
-
-
-    # Inventory Management Step
-    def run_risk_management_test(self, api, positions_df_backtest, markets_df, orders_df_backtest, cash, EXIT_EV_THRESHOLD):
-
-        for _, pos in positions_df_backtest.iterrows():
-
-            condition_id = pos["condition_id"]
-            market = markets_df.loc[markets_df["conditionId"] == condition_id].iloc[0]
-
-            print("pos:", pos)
-            print("market:", market)
-
-            fee_rate = market["feeSchedule"]["rate"]
-
-            p_yes = market["model_prob"]
-            p_no = 1 - p_yes
-
-            if pos["outcome"] == "Yes": # no shorting in polymarket
-                current_bid = market["yes_bid"]
-                hold_ev = p_yes
-                exit_ev = current_bid - self.fee(current_bid, fee_rate)
-
-            elif pos["outcome"] == "No":
-                current_bid = market["no_bid"]
-                hold_ev = p_no
-                exit_ev = current_bid - self.fee(current_bid, fee_rate)
-
-            if (exit_ev - hold_ev) > EXIT_EV_THRESHOLD:
-                best_action = "EXIT"
-
-            else:
-                best_action = "HOLD"
-
-            client_oid = str(uuid.uuid4())
-
-            print("\n{ TEST } - EXIT / HOLD SIGNAL")
-
-            self.format_signal_exit(best_action, market, pos, current_bid,
-                        client_oid, hold_ev, exit_ev, fee_rate, EXIT_EV_THRESHOLD)
-
-            if best_action == "EXIT":
-                confirm_order = True
-
-                if confirm_order == True:
-
-                    price_tick = float(api.tick_size(pos["token_id"])["tick_size"])
-                    price = api.round_to_tick(current_bid, price_tick)
-                    normalized_size = api.normalize_size(pos["shares"])
-                    
-                    try:
-                        order = api.place_limit_order_test(
-                            token_id=pos["token_id"],
-                            side="sell",
-                            price=price,
-                            size=normalized_size,
-                            order_type="GTC",
-                        )
-                
-                        print("\nLIMIT ORDER SUBMITTED\n\n")
-                        print(order)
-                
-                        order_row = {
-                            "question": pos["question"],
-                            "order_id": order["clob_order_id"],
-                            "condition_id": condition_id,
-                            "token_id": pos["token_id"],
-                            "outcome": pos["outcome"],
-                            "side": "SELL",
-                            "price": float(price),
-                            "requested_size": normalized_size,
-                            "order_type": "GTC",
-                            "status": "OPEN",
-                            "created_at": datetime.now(timezone.utc),
-                            "cancelled_at": None,
-                        }
-
-                        orders_df_backtest = pd.concat([orders_df_backtest, pd.DataFrame([order_row])], ignore_index=True)
-                        orders_df_backtest["created_at"] = pd.to_datetime(orders_df_backtest["created_at"], utc=True)
-                        orders_df_backtest["cancelled_at"] = pd.to_datetime(orders_df_backtest["cancelled_at"], utc=True)
-
-                        fee_rate = float(api.fee_rate(pos["token_id"])["fee_rate"])
-                        fee = self.fee(price, fee_rate)
-                        nominal_price = normalized_size * (float(price) - fee)
-
-                        print("cash:", cash)
-                        cash += nominal_price
-                        print("Updated cash:", cash, "price:", price, "fee:", fee)
-                
-                        print("\nLIMIT ORDER RECORDED\n\n")
-            
-                    except Exception as e:
-                        print("\nLIMIT ORDER ERROR\n\n")
-                        print(e)
-                        break
-
-                else:
-                    print("\nSKIPPING LIMIT ORDER\n\n")
-
-        return orders_df_backtest
 
 
     def format_signal_entry(self, trade, outcome, best_action, kelly, 
@@ -1114,14 +878,6 @@ class Portfolio():
                 price = api.round_to_tick(current_ask, price_tick)
     
                 try:
-                    # order = api.place_limit_order_test(
-                    #     token_id=token_id,
-                    #     side="buy",
-                    #     price=price,
-                    #     size=normalized_size,
-                    #     order_type="GTC",
-                    #     client_order_id=client_oid
-                    # )
                     order = api.place_limit_order(
                         token_id=token_id,
                         side="buy",
@@ -1164,140 +920,6 @@ class Portfolio():
                 print("\nLIMIT SKIPPING ORDER\n\n")
     
         return orders_df
-
-
-    # New Opportunities Step
-    def run_new_opportunities_test(self, api, opportunities_df, orders_df_backtest, cash,
-                                ENTRY_EV_THRESHOLD=0.02, MAX_POSITION=0.05, FRACTION=0.25):
-
-        # cash = float(api.balance()["balance"])
-            
-        for _, trade in opportunities_df.iterrows():
-    
-            if trade["best_ev"] < ENTRY_EV_THRESHOLD:
-                print(f"Current trade is less than required ev ({ENTRY_EV_THRESHOLD}), skipping")
-                continue
-    
-            # usually cannot short, this only happens when im closing positions
-            if trade["best_action"] == "buy_yes_ev" or trade["best_action"] == "sell_no_ev":
-                best_action = "buy_yes_ev"
-                ev = trade["buy_yes_ev"]
-                token_id = trade["yes_token"]
-                outcome = "Yes"
-                kelly = trade["buy_yes_kelly"]
-                current_ask = trade["yes_ask"]
-    
-            elif trade["best_action"] == "buy_no_ev" or trade["best_action"] == "sell_yes_ev":
-                best_action = "buy_no_ev"
-                ev = trade["buy_no_ev"]
-                token_id = trade["no_token"]
-                outcome = "No"
-                kelly = trade["buy_no_kelly"]
-                current_ask = trade["no_ask"]
-    
-            current_size = float(api.balance(asset_type="conditional", token_id=token_id)["balance"])
-            print("current balance size:", current_size)
-    
-            max_position_value = cash * MAX_POSITION
-            current_position_value = current_size * current_ask
-            remaining_capacity = max(0.0, max_position_value - current_position_value)
-    
-            if remaining_capacity == 0:
-                print(f"No more dollars to allocate for this trade position, skipping, remaining_capacity: {remaining_capacity}")
-                continue
-    
-            kelly_dollars = cash * FRACTION * kelly
-    
-            dollars = min(kelly_dollars, remaining_capacity)
-    
-            if dollars < 1.0:
-                print(f"Order too small after position cap, skipping, dollars: {dollars}")
-                continue
-    
-            print(f"dollars: {dollars}")
-    
-            size = dollars / current_ask
-            normalized_size = api.normalize_size(size)
-            
-            client_oid = str(uuid.uuid4())
-
-            print("\n{ TEST } - BUY SIGNAL")
-    
-            self.format_signal_entry(trade, outcome, best_action, kelly, 
-                                            normalized_size, current_ask, token_id, 
-                                            client_oid, ev, cash, current_size, 
-                                            ENTRY_EV_THRESHOLD, FRACTION, MAX_POSITION)
-    
-            confirm_order = (input("Place this order? Type YES to confirm: ") == "YES")
-            
-            if confirm_order == True:
-    
-                price_tick = float(api.tick_size(token_id)["tick_size"])
-                price = api.round_to_tick(current_ask, price_tick)
-    
-                try:
-                    order = api.place_limit_order_test(
-                        token_id=token_id,
-                        side="buy",
-                        price=price,
-                        size=normalized_size,
-                        order_type="GTC",
-                        client_order_id=client_oid
-                    )
-            
-                    print("\nLIMIT ORDER SUBMITTED\n\n")
-                    print(order)
-    
-                    order_row = {
-                        "question": trade["question"],
-                        "order_id": order["clob_order_id"],
-                        "condition_id": trade["conditionId"],
-                        "token_id": token_id,
-                        "outcome": outcome,
-                        "side": "BUY",
-                        "price": float(price),
-                        "requested_size": normalized_size,
-                        "order_type": "GTC",
-                        "status": "OPEN",
-                        "created_at": datetime.now(timezone.utc),
-                        "cancelled_at": None,
-                    }
-            
-                    orders_df_backtest = pd.concat([orders_df_backtest, pd.DataFrame([order_row])], ignore_index=True)
-                    orders_df_backtest["created_at"] = pd.to_datetime(orders_df_backtest["created_at"], utc=True)
-                    orders_df_backtest["cancelled_at"] = pd.to_datetime(orders_df_backtest["cancelled_at"], utc=True)
-
-                    fee_rate = trade["feeSchedule"]["rate"]
-                    fee = self.fee(price, fee_rate)
-                    nominal_price = normalized_size * (float(price) + fee)
-
-                    print("cash:", cash)
-                    cash -= nominal_price
-                    print("Updated cash:", cash, "price:", price, "fee:", fee)
-            
-                    print("\nLIMIT ORDER RECORDED\n\n")
-    
-                except Exception as e:
-                    print("\nLIMIT ORDER ERROR\n\n")
-                    print(e)
-                    break
-    
-            else:
-                print("\nLIMIT SKIPPING ORDER\n\n")
-    
-        return orders_df_backtest
-
-
-    def update_cash(self, cash, cash_df_backtest):
-
-        new_row = pd.DataFrame([{
-            "balance": cash,
-            "timestamp": datetime.now(timezone.utc)
-        }])
-
-        cash_df_backtest = pd.concat([cash_df_backtest, new_row], ignore_index=True)
-
-        return cash_df_backtest
 
 
     def save_snapshots(self, DATA_DIR, df, df_name):
