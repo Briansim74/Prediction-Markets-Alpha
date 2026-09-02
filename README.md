@@ -1,5 +1,5 @@
 # Prediction-Markets-Alpha
-Systematic prediction-market trading strategy focused on identifying mispriced event contracts, translating market-implied volatility into probability estimates, and converting probabilistic edge into risk-adjusted trades.
+Systematic prediction-market trading strategy focused on identifying mispriced event contracts, translating market-implied volatility into probability estimates, identifying structural arbitrage opportunities, and converting probabilistic edge into risk-adjusted trades.
 
 Currently focused on crypto prediction markets, particularly BTC and ETH price-event contracts.
 
@@ -9,7 +9,11 @@ Prediction-market trading is fundamentally a probability and pricing problem.
 The market provides a contract price:
 <p align="center"><b>P_market ≈ P(YES)</b></p>
 
-The objective is to determine whether the true probability is sufficiently different from that price to overcome:
+The objective is to determine whether the executable market price is sufficiently different from either:
+  1. an independently estimated probability, or
+  2. the theoretical relationship between related contracts,
+
+to overcome:
 - trading fees
 - bid/ask spread
 - execution costs
@@ -17,99 +21,179 @@ The objective is to determine whether the true probability is sufficiently diffe
 - position risk
 - inventory exposure
 
-The system therefore does not simply ask:
+The system therefore has two complementary sources of trading edge:
 ```
-"Will Bitcoin go up?"
+Probability-Based Relative Value
+               +
+      Structural Arbitrage
+               ↓
+       Trade Selection
+               ↓
+           Execution
 ```
-It asks:
+The probability strategy asks:
 ```
 "Is this contract mispriced relative to my estimate of the probability of the event occurring?"
 ```
-A trade is only attractive when the estimated probability produces sufficient expected value after trading costs.
+
+The arbitrage strategy asks:
+```
+"Are related contracts priced inconsistently with the logical payoff structure of the event set?"
+```
+A trade is only attractive when the expected or guaranteed edge remains positive after transaction costs.
 
 ## System Overview
 ```
-                                       Prediction Markets
-                                                │
-                                                ▼
-                                    Market / Order Book Scan
-                                                │                    
-                                                ▼                     
-                                      Crypto Market Parsing    Options Markets
-                                                │                     │
-                                                ▼                     ▼
-                                        Event Structure           BTC / ETH
-                                         Touch / Expiry       Implied Volatility
-                                                │                     │
-                                                └──────────┬──────────┘
-                                                           ▼
-                                                     Surface Model
-                                                           │
-                                                           ▼
-                        Portfolio Reconstruction    Probability Model
-                                     │                     │
-                                     ▼                     ▼
-                           Fill / Order Tracking  P(Model) vs P(Market)
-                                     │                     │
-                                     ▼                     ▼
-                              Mark-to-Market        Expected Value
-                                     │                     │
-                                     ▼                     ▼
-                               Equity / P&L          Kelly Sizing
-                                     │                     │
-                                     └──────────┬──────────┘
-                                                ▼
-                                        Entry / No Entry
-                                                │
-                                                ▼
-                                         Order Execution
-                                                │
-                                                ▼
-                                      Live Order Management
-                                                │
-                                                ▼
-                                      Inventory / Exit Logic
+                 Prediction Markets
+                         │
+                         ▼
+                   Market Scanner
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+              ▼                     ▼
+       Probability Engine     Arbitrage Engine
+              │                     │
+              ▼                     ├── Cross-Market
+       Model Probability            │
+              │                     └── Vertical
+              ▼
+       Market Comparison
+              │
+              ▼
+       Fee-Adjusted EV
+              │
+              └──────────┬──────────┘
+                         ▼
+                  Trade Selection
+                         │
+                         ▼
+                     Execution
 ```
+
+## Trading Framework
+The trading engine currently evaluates two primary forms of opportunity:
+
+### 1. Probability-Based Relative Value
+External crypto derivatives markets are used to estimate the probability of prediction-market events.
+
+```
+    BTC / ETH Options
+            │
+            ▼
+    Volatility Surface
+            │
+            ▼
+Risk-Neutral Distribution
+            │
+            ▼
+Touch / Expiry Probability
+            │
+            ▼
+ Prediction Market Price
+            │
+            ▼
+Fee-Adjusted Expected Value
+            │
+            ▼
+     Position Sizing
+```
+The strategy does not trade simply because the options market and prediction market disagree.
+
+The estimated probability must produce sufficient expected value at the executable bid/ask price after fees.
+
+### 2. Arbitrage
+### Cross-Market Arbitrage
+The scanner also searches for arbitrage between prediction-market contracts representing the same underlying event structure.
+
+For contracts with equivalent payoff conditions, the system compares the cost of constructing complementary outcomes across two markets.
+
+For example:
+```
+BUY YES on Market A
+        +
+BUY NO on Market B
+        ↓
+Total Cost < $1
+        ↓
+Guaranteed Profit
+```
+If both positions collectively guarantee a $1 payout while their fee-adjusted acquisition cost is below $1:
+```
+Guaranteed Profit = 1 - Total Cost
+```
+The scanner evaluates both directions:
+```
+YES(A) + NO(B)
+YES(B) + NO(A)
+```
+after incorporating the applicable trading fees.
+
+This allows the system to detect pricing inconsistencies across contracts without requiring a directional view on BTC or ETH.
+
+### Vertical Arbitrage
+The scanner also evaluates the logical ordering of contracts with different strikes.
+
+For an upward barrier event, a lower strike should be at least as likely to be reached as a higher strike:
+<p align="center"><b>P(S touches K_lower) ≥ P(S touches K_higher)</b></p>
+
+Therefore, for two contracts with:
+<p align="center"><b>K_lower < K_higher</b></p>
+
+the system searches for situations where:
+<p align="center"><b>YES(K_lower) + NO(K_higher) < $1</b></p>
+
+after fees.
+
+The resulting payoff is bounded such that at least one of the two contracts must resolve YES.
+```
+Lower Strike YES
+        +
+Higher Strike NO
+        ↓
+Guaranteed $1 payout
+```
+
+For downward events, the direction is reversed:
+```
+Lower Strike NO
+        +
+Higher Strike YES
+```
+The scanner evaluates adjacent strikes across the available contract surface and records opportunities where the combined executable cost is below the guaranteed payout.
+
+This effectively treats the prediction-market contract set as a discrete option surface and searches for violations of monotonicity / no-arbitrage relationships.
+
 ## Edge Decomposition
-The strategy's edge can be thought of as:
+The strategy's edge can therefore be decomposed into two distinct mechanisms:
 ```
-  Probability Model
-          +
-  Market Mispricing
-          -
-    Trading Fees
-          -
-    Execution Costs
-          -
-     Model Error
-          -
-   Position Risk
-          =
-Realizable Trading Edge
+                 Trading Edge
+                      │
+          ┌───────────┴───────────┐
+          │                       │
+          ▼                       ▼
+ Probability Relative    Structural Arbitrage
+        Value                     │
+          │                       │
+  P_model - P_market      Payoff Inequality
+          │                       │
+          ▼                       ▼
+   Expected Value         Guaranteed Profit
+          │                       │
+          └───────────┬───────────┘
+                      ▼
+              Transaction Costs
+                      │
+                      ▼
+                Realizable Edge
 ```
-A probability forecast is only useful if it produces a sufficiently large discrepancy from the executable market price.
+For probability-based trades, the key uncertainty is model probability error.
 
-Likewise, a large theoretical edge is not useful if it cannot be traded at the quoted price.
+For arbitrage trades, the key risks are primarily execution, liquidity, settlement interpretation, and synchronization across legs.
 
-## Core Trading Engine
-The trading engine consists of five major components:
+The system therefore treats the two strategies differently rather than forcing arbitrage opportunities through the probability model.
 
-#### 1. Probability estimation
-Estimate the probability of the prediction-market event using external crypto volatility information.
-
-#### 2. Market pricing
-Read the current YES/NO order books and determine executable prices.
-
-#### 3. Edge calculation
-Compare model probability against executable market prices while incorporating fees.
-
-#### 4. Position sizing
-Convert expected value into a position size using fractional Kelly sizing and portfolio limits.
-
-#### 5. Position management
-Continuously reassess existing positions and exit when the original trade thesis deteriorates.
-
-## Probability Engine
+## Probability Estimation
 The system uses external crypto derivatives data to construct a volatility surface for BTC and ETH.
 
 Current market inputs include:
@@ -131,7 +215,7 @@ The volatility surface is used to estimate the probability distribution of the u
 IV at Market Strike / Expiry
              │
              ▼
-       Probability Model
+      Probability Model
              │
              ▼
 Prediction Market Fair Value
@@ -154,9 +238,7 @@ Contracts where the underlying asset needs to reach a particular level at any po
 Examples:
 ```
 Will BTC reach $120,000 before December 25?
-```
-or
-```
+
 Will ETH fall to $2,500 before expiry?
 ```
 The system estimates:
@@ -170,9 +252,7 @@ Contracts where the underlying must finish above or below a strike at expiry. Be
 Examples:
 ```
 Will BTC be above $120,000 on December 25?
-```
-or
-```
+
 Will ETH finish below $3,000?
 ```
 The system estimates:
@@ -185,50 +265,16 @@ or
 
 depending on the contract direction.
 
-## Market Scanner
-The scanner continuously filters the available prediction-market universe.
-
-Markets must satisfy:
-- acceptingOrders == True
-- enableOrderBook == True
-
-The scanner then identifies relevant crypto contracts using keyword matching for:
-- Bitcoin
-- BTC
-- XBT
-- Ethereum
-- ETH
-
-Each market is parsed into structured trading information:
-- currency
-- strike
-- expiry
-- time-to-expiry
-- direction
-- event type
-- YES token
-- NO token
-- YES bid / ask
-- NO bid / ask
-- implied volatility
-- model probability
-- expected value
-- Kelly allocation
-
-This converts an unstructured prediction-market question into a tradable quantitative instrument.
-
 ## Probability → Price
 A prediction-market YES contract can be interpreted approximately as:
-
-<p align="center"><b>P_market = P(YES)</b></p>
+<p align="center"><b>P_market = P_P(YES)</b></p>
 
 For example:
 ```
 YES ask = $0.38
 ```
-implies a market price of approximately:
-
-<p align="center"><b>P(YES) = 38%</b></p>
+implies a physical market probability of approximately:
+<p align="center"><b>P_P(YES) = 38%</b></p>
 
 If the model estimates:
 ```
@@ -241,63 +287,69 @@ But the system does not trade on probability difference alone.
 
 It calculates the actual expected value of the executable trade.
 
-## Expected Value
-For a YES purchase:
-<p align="center"><b>Cost = P_ask + Fee * (P_ask)</b></p>
+### Probability Calibration
+The probability layer is treated as a trading signal rather than an assumption of perfect physical probabilities.
 
-where:
-<p align="center"><b>Fee(P) = fee_rate * P_ask * (1 − P_ask)</b></p>
-
-The expected value is:
-<p align="center"><b>EV = P_model * (1 − Cost) − (1 − P_model) * Cost</b></p>
-
-This produces expected P&L per contract.
-
-The same framework is applied to:
-- BUY YES
-- SELL YES
-- BUY NO
-- SELL NO
-
-The system therefore evaluates the entire contract from both sides of the book rather than simply comparing model probability with the midpoint.
-
-## Fees Matter
-A central feature of the trading system is that expected value is calculated after fees.
-
-A small theoretical probability edge can disappear once transaction costs are included.
-
-For every executable price:
+The initial hypothesis was:
 ```
-    market price
-          +
-     trading fee
-          ↓
- effective entry cost
-          ↓
-     expected PnL
+Can an options-implied risk-neutral distribution be transformed into a useful estimate of the physical probability of a crypto price touching a specified barrier before expiry?
 ```
+The calibration analysis showed that the option-derived signal contains useful discriminatory information: 
+- contracts assigned higher predicted probabilities generally exhibited higher realized touch frequencies.
 
-This is important because prediction-market contracts can trade close to fair value while still appearing attractive if fees are ignored.
+However, the raw probabilities were not perfectly calibrated.
 
-The strategy therefore treats transaction costs as part of the pricing problem rather than an afterthought.
-
-## Fractional Kelly Position Sizing
-Position sizing is based on Kelly sizing with a conservative fractional allocation.
-
-Current configuration:
+Therefore, the strategy distinguishes between:
 ```
-FRACTION = 0.25
+   Risk-Neutral Probability
+              ↓
+       Probability Signal
+              ↓
+         Calibration
+              ↓
+Estimated Physical Probability
+```
+This distinction is important because an options-implied risk-neutral probability should not automatically be interpreted as the true real-world probability.
+
+The probability engine is consequently designed so that calibration can be incorporated into the probability-to-price layer rather than assuming:
+<p align="center"><b>P_Q = P_P</b></p>
+
+### Market Dislocation
+Once a probability estimate is available, the strategy evaluates whether the prediction market is sufficiently mispriced to trade.
+
+For a YES position:
+```
+P_model(YES)
+        -
+Executable YES Price
+        -
+Trading Costs
+        =
+Expected Value
 ```
 
-The system calculates a Kelly allocation from expected value and then uses only a fraction of the theoretical Kelly position.
+For a NO position:
+```
+P_model(NO)
+        -
+Executable NO Price
+        -
+Trading Costs
+        =
+Expected Value
+```
+The system only considers entering when the estimated edge exceeds the minimum trading threshold.
 
-This provides a balance between:
-- maximizing capital efficiency
-- controlling model uncertainty
-- avoiding excessive concentration
-- surviving probability-estimation errors
-
-The resulting allocation is additionally constrained by a maximum position limit.
+This separates the probability problem from the trade-selection problem:
+```
+Probability Estimation
+        ↓
+Market Comparison
+        ↓
+Fee-Adjusted EV
+        ↓
+Trade / No Trade
+```
 
 ## Entry Logic
 The current strategy requires:
@@ -325,22 +377,26 @@ EV > Entry Threshold?
 ```
 This prevents the system from deploying capital into marginal opportunities.
 
-## Portfolio Constraints
-The current configuration uses:
-```
-MAX_POSITION = 0.05
-```
-so an individual position is capped at approximately:
-```
-5% of available capital
-```
-The actual allocation is:
-<p align="center"><b>min(cash * fractional Kelly, cash * maximum position)</b></p>
+## Fractional Kelly Position Sizing
+Position sizing is based on Kelly sizing with a conservative fractional allocation.
 
-This means even a highly attractive model signal cannot automatically consume a disproportionate amount of portfolio capital.
+Current configuration:
+```
+FRACTION = 0.25
+```
+
+The system calculates a Kelly allocation from expected value and then uses only a fraction of the theoretical Kelly position.
+
+This provides a balance between:
+- maximizing capital efficiency
+- controlling model uncertainty
+- avoiding excessive concentration
+- surviving probability-estimation errors
+
+The resulting allocation is additionally constrained by a maximum position limit.
 
 ## Execution
-Once a trade passes the EV and risk checks, the system converts the desired dollar allocation into contracts:
+Once a trade passes the relevant opportunity and risk checks, the system converts the desired allocation into contracts:
 ```
      Dollar Allocation
              │
@@ -365,87 +421,72 @@ Orders are currently submitted as:
 - GTC
 - LIMIT
 
-The system also records the resulting order ID and maintains an internal order ledger.
+The system records the resulting order ID and maintains an internal order ledger.
 
-## Order Management
-Open orders are continuously reconciled against the trading API.
+For multi-leg arbitrage, execution risk becomes particularly important.
 
-The system tracks:
-- order_id
-- condition_id
-- token_id
-- side
-- price
-- requested size
-- filled size
-- remaining size
-- status
-- created_at
-- cancelled_at
+A theoretical arbitrage is only realizable if both legs can be acquired at the assumed prices and sizes.
 
-This allows the internal trading state to remain synchronized with exchange state.
+Therefore, the scanner treats the displayed arbitrage opportunity as a candidate and the execution layer is responsible for:
+- available liquidity
+- executable size
+- order synchronization
+- partial fills
+- stale quotes
+- legging risk
+- capital availability
 
-Orders can subsequently be evaluated for cancellation when:
-- expected value disappears
-- market price changes
-- market conditions change
-- inventory constraints change
-- the order becomes stale
+This distinction prevents a quoted theoretical arbitrage from being treated as automatically realizable P&L.
 
-The objective is to avoid leaving capital committed to trades whose original edge no longer exists.
-
-## Inventory Management
-Once a position exists, the system stops treating it as a new opportunity.
-
-It becomes an inventory management problem.
-
-For every open position:
+### Position Management
+Open probability-based positions are continuously reevaluated.
 ```
-Current Position
-       │
-       ▼
-Current Market Price
-       │
-       ▼
+   Current Position
+           │
+           ▼
+  Current Market Price
+           │
+           ▼
 Recalculate Probability
-       │
-       ▼
+           │
+           ▼
 Recalculate Expected Value
-       │
-       ▼
-Hold or Exit
+           │
+           ▼
+     Hold or Exit
 ```
 
 Current exit threshold:
-```
 EXIT_EV_THRESHOLD = -0.02
-```
+
 If the expected value of continuing to hold the position deteriorates sufficiently, the system generates an exit signal.
-
-## Exit Logic
-The system evaluates existing inventory using the current bid.
-
-For a YES position:
-- current YES bid
-- buy YES EV
-- sell YES EV
-
-For a NO position:
-- current NO bid
-- buy NO EV
-- sell NO EV
-
-The important distinction is that holding a position has an opportunity cost.
 
 The relevant question is not:
 ```
-"Did I buy this at a good price?"
+Did I buy this at a good price?
 ```
 It is:
 ```
-"Given today's information, is holding this position still better than exiting?"
+Given current information, is holding this position still better than exiting?
 ```
-This allows the portfolio to dynamically recycle capital into better opportunities.
+This allows capital to be recycled toward stronger opportunities.
+
+### Arbitrage vs. Directional Positions
+The system deliberately separates structural arbitrage from probability-based directional positions.
+
+| Strategy                   | Source of Edge                             | Probability Model Required	   | Primary Risk           |
+|----------------------------|--------------------------------------------|--------------------------------|------------------------|
+| Probability Relative Value | Model probability vs market price	        | Yes	                           | Model error            |
+| Cross-Market Arbitrage	   | Equivalent-contract pricing inconsistency	| No	                           | Execution / liquidity  |
+| Vertical Arbitrage	       | Strike/payoff ordering inconsistency	      | No                             | Execution / settlement |
+| Inventory Management	     | Dynamic repricing                          |	Yes for model-driven positions | Opportunity cost       |
+
+This separation is important because the strategies have fundamentally different risk profiles.
+
+A probability trade can be wrong because the estimated probability is wrong.
+
+A structural arbitrage trade can have a positive theoretical payoff without knowing the probability of the underlying event, but can still fail to realize the theoretical edge because of execution, liquidity, partial fills, or incorrect assumptions about contract equivalence.
+
 
 ## FIFO Portfolio Reconstruction
 Executed trades are stored as fills rather than treating API positions as the complete source of truth.
@@ -529,82 +570,38 @@ The live trading workflow is:
         │
 8. Calculate Fee-Adjusted EV
         │
-9. Synchronize Fills
+9. Scan Cross-Market Arbitrage
         │
-10. Reconstruct Portfolio
+10. Scan Vertical Arbitrage
         │
-11. Synchronize Orders
+11. Synchronize Fills
         │
-12. Manage Existing Orders
+12. Reconstruct Portfolio
         │
-13. Mark Positions to Market
+13. Synchronize Orders
         │
-14. Calculate Equity
+14. Manage Existing Orders
         │
-15. Manage Existing Inventory
+15. Mark Positions to Market
         │
-16. Find New Opportunities
+16. Calculate Equity
         │
-17. Submit Orders
+17. Manage Existing Inventory
         │
-18. Persist Trading State
+18. Rank New Opportunities
         │
-19. Repeat
+19. Submit Orders
+        │
+20. Persist Trading State
+        │
+21. Repeat
 ```
 The system therefore operates as a closed-loop trading process rather than a standalone prediction model.
 
-## Project Structure
-```
-prediction-markets-arb/
-│
-├── scanner/
-│   ├── scanner.py
-│   ├── options.py
-│
-├── execution/
-│   ├── api_client.py
-│
-├── data/
-│   ├── markets.parquet
-│   ├── opportunities.parquet
-│   ├── orders.parquet
-│   ├── fills.parquet
-│   ├── positions.parquet
-│   ├── realized_pnl.parquet
-│   └── equity.parquet
-│
-└── market.ipynb
-```
+## Trading Philosophy
+The project is built around several principles:
 
-## Trading State
-The system persists the trading state between iterations.
-```
-Markets
-   │
-   ├── markets.parquet
-   └── opportunities.parquet
-           
-Orders
-   │
-   └── orders.parquet
-
-Fills
-   │
-   └── fills.parquet
-
-Portfolio
-   │
-   ├── positions.parquet
-   └── realized_pnl.parquet
-
-Performance
-   │
-   └── equity.parquet
-```
-This allows for the opportunity to restart the engine without losing its internal portfolio history.
-
-## Design Principles
-### Probability first
+#### Probability first
 The system attempts to quantify the probability of the event rather than trade purely on market momentum.
 
 #### Trade the discrepancy
@@ -615,11 +612,18 @@ It is to identify:
 
 with enough margin to justify taking risk.
 
+Exploit structural relationships
+
+Related prediction contracts can contain arbitrage opportunities even without forecasting the underlying asset.
+
 #### Price execution matters
 The strategy evaluates executable bid/ask prices rather than relying exclusively on midpoints.
 
 #### Fees are part of the signal
 An edge that disappears after fees is not an edge.
+
+#### Guaranteed does not mean executable
+An arbitrage relationship may guarantee a payoff theoretically, but the realized trade still depends on liquidity, order-book depth, fill synchronization, and contract interpretation.
 
 #### Position sizing matters
 A good forecast with excessive sizing can still produce a bad trading strategy.
@@ -635,7 +639,7 @@ This project is a quantitative prediction-market trading engine.
 
 It combines:
 ```
-Options Market Data
+Crypto Options Data
         +
 Volatility Modeling
         +
@@ -645,6 +649,8 @@ Prediction Market Pricing
         +
 Expected Value
         +
+Structural Arbitrage
+        +
 Fractional Kelly
         +
 Execution
@@ -653,4 +659,12 @@ Inventory Management
         +
 Portfolio Accounting
 ```
-The goal is to turn differences between model-implied probability and prediction-market pricing into systematically managed trades.
+The system therefore has two complementary ways of generating trading opportunities:
+```
+1. Estimate fair probability
+   → identify relative-value trades
+
+2. Identify payoff inconsistencies
+   → identify structural arbitrage trades
+```
+The goal is to convert both forms of pricing inefficiency into systematically managed trades while explicitly accounting for transaction costs, execution constraints, model uncertainty, and portfolio risk.
